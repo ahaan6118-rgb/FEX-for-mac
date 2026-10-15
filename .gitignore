@@ -1,0 +1,28 @@
+# Build artifacts
+build_macos/
+*.o
+*.a
+*.dylib
+
+# Wine source (too large — download separately)
+wine-11.19/
+wine-11.19.tar.xz
+
+# DXMT source (build dependency)
+dxmt/
+dxmt-src/
+
+# App bundle binaries (built from source)
+RosettaKiller.app/Contents/MacOS/RosettaKiller
+RosettaKiller.app/Contents/Frameworks/
+RosettaKiller.app/Contents/Resources/wine/
+RosettaKiller.app/Contents/Resources/mkxp-z/mkxp-z.aarch64
+RosettaKiller.app/Contents/Resources/mkxp-z/mkxp.json
+RosettaKiller.app/Contents/Resources/test_apps/
+RosettaKiller.app/Contents/Resources/hello_direct.exe
+RosettaKiller.app/Contents/_CodeSignature/
+
+# macOS
+.DS_Store
+*.swp
+*~
