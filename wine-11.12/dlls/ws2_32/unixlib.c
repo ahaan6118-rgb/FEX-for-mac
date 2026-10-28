@@ -101,33 +101,7 @@
 
 #include "ws2_32_private.h"
 
-/* Guest-window support (macOS arm64): 32-bit pointers are offsets into the window starting at the
- * host address reported by ProcessWineIosWowGuestBase (0 = identity mapping). */
-#ifdef __APPLE__
-static ULONG_PTR wow_guest_base(void)
-{
-    static ULONG_PTR base;
-    static int init;
-    if (!init)
-    {
-        if (NtQueryInformationProcess( (HANDLE)~(ULONG_PTR)0, ProcessWineIosWowGuestBase, &base, sizeof(base), NULL ))
-            base = 0;
-        init = 1;
-    }
-    return base;
-}
-static inline void *wow_to_host( ULONG addr ) { return addr ? (void *)(wow_guest_base() + addr) : NULL; }
-static inline ULONG wow_to_guest( const void *ptr )
-{
-    ULONG_PTR addr = (ULONG_PTR)ptr, base = wow_guest_base();
-    if (base && addr >= base && addr - base < ((ULONG_PTR)1 << 32)) return (ULONG)(addr - base);
-    return (ULONG)addr;
-}
-#undef ULongToPtr
-#undef PtrToUlong
-#define ULongToPtr(x) wow_to_host(x)
-#define PtrToUlong(x) wow_to_guest(x)
-#endif
+#include "wine/wow_guest.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(winsock);
 WINE_DECLARE_DEBUG_CHANNEL(winediag);

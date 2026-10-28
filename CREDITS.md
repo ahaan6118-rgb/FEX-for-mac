@@ -23,6 +23,12 @@ the JIT state register off x28 so Wine can keep the TEB there). FEX is MIT licen
 https://github.com/willfaust/FEX
 https://github.com/willfaust/wine
 
+### GnuTLS and its dependencies
+Wine's schannel and PFX support load GnuTLS at runtime. FEX for Mac bundles GnuTLS with
+nettle, libtasn1, p11-kit, libidn2, libunistring, gmp and gettext (libintl) from Homebrew
+builds. These are licensed under LGPL 2.1+ (GnuTLS, nettle) and related free licenses.
+https://www.gnutls.org/
+
 ### MetalSharp / VKMT-Wine
 Pioneered running Wine on ARM64 macOS without Rosetta 2. Their work includes:
 - Wine patches for ARM64 macOS (KUSER_SHARED_DATA relocation, address space layout)
