@@ -4757,8 +4757,6 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec, 
     mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
     vprot = get_host_page_vprot( page );
 
-    ERR( "VKMT fault: err=%lu addr=%p page=%p vprot=%02x pc=%p\n", (unsigned long)err, addr, page, vprot, rec->ExceptionAddress );
-
 #ifdef __APPLE__
     /* Rosetta on Apple Silicon misreports certain write faults as read faults. */
     if (err == EXCEPTION_READ_FAULT && (get_unix_prot( vprot ) & PROT_READ))
@@ -4802,7 +4800,6 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec, 
          * switch the actual protection to RW (allow writes, block exec). */
         if (is_vprot_exec_write( vprot ) && (vprot & VPROT_COMMITTED))
         {
-            ERR( "VKMT W^X: write fault at %p, page %p vprot=%02x, switching to RW\n", addr, page, vprot );
             mprotect( page, host_page_size, PROT_READ | PROT_WRITE );
             ret = STATUS_SUCCESS;
         }
@@ -4818,14 +4815,9 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec, 
 #if defined(__APPLE__) && defined(__aarch64__)
     else if (err == EXCEPTION_EXECUTE_FAULT && is_vprot_exec_write( vprot ) && (vprot & VPROT_COMMITTED))
     {
-        ERR( "VKMT W^X: exec fault at %p, page %p vprot=%02x, switching to RX\n", addr, page, vprot );
         mprotect( page, host_page_size, PROT_READ | PROT_EXEC );
         __builtin___clear_cache( page, page + host_page_size );
         ret = STATUS_SUCCESS;
-    }
-    else if (err == EXCEPTION_EXECUTE_FAULT)
-    {
-        ERR( "VKMT W^X: UNHANDLED exec fault at %p, page %p vprot=%02x\n", addr, page, vprot );
     }
 #endif
     mutex_unlock( &virtual_mutex );

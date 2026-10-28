@@ -1049,37 +1049,26 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
     GET_PTR( sdwhwin32 );
     syscall_tables[1] = *psdwhwin32;
 
-    ERR( "FEXDBG: NtCurrentTeb()=%p (x28 check), calling BTCpuProcessInit\n", NtCurrentTeb() );
     pBTCpuProcessInit();
-    ERR( "FEXDBG: BTCpuProcessInit returned\n" );
 
     module = (HMODULE)(ULONG_PTR)pLdrSystemDllInitBlock->ntdll_handle;
-    ERR( "FEXDBG: 32-bit ntdll at %p\n", module );
     init_image_mapping( module );
-    ERR( "FEXDBG: init_image_mapping done\n" );
     GET_PTR( KiRaiseUserExceptionDispatcher );
     GET_PTR( __wine_syscall_dispatcher );
     GET_PTR( __wine_unix_call_dispatcher );
 
-    ERR( "FEXDBG: BopCode=%p unix_opcode=%p\n", pBTCpuGetBopCode(), p__wine_get_unix_opcode() );
     *p__wine_syscall_dispatcher = host_ptr32( pBTCpuGetBopCode() );
     *p__wine_unix_call_dispatcher = host_ptr32( p__wine_get_unix_opcode() );
-    ERR( "FEXDBG: dispatchers set: syscall=%08x unix=%08x\n",
-         *p__wine_syscall_dispatcher, *p__wine_unix_call_dispatcher );
 
     if (wow64info->CpuFlags & WOW64_CPUFLAGS_SOFTWARE) create_cross_process_work_list( wow64info );
-    ERR( "FEXDBG: cross-process work list done\n" );
 
     if (current_machine == IMAGE_FILE_MACHINE_I386)
     {
         I386_CONTEXT ctx = { CONTEXT_I386_CONTROL };
-        ERR( "FEXDBG: calling RtlWow64GetThreadContext\n" );
         RtlWow64GetThreadContext( GetCurrentThread(), &ctx );
         ss32_sel = ctx.SegSs;
-        ERR( "FEXDBG: thread context done, ss32=%04x\n", ss32_sel );
     }
 
-    ERR( "FEXDBG: calling init_file_redirects\n" );
     init_file_redirects();
     return TRUE;
 
@@ -1092,12 +1081,9 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
  */
 static void thread_init(void)
 {
-    ERR( "FEXDBG: thread_init start\n" );
     NtCurrentTeb32()->WOW32Reserved = host_ptr32( pBTCpuGetBopCode() );
     NtCurrentTeb()->TlsSlots[WOW64_TLS_WOW64INFO] = wow64info;
-    ERR( "FEXDBG: calling BTCpuThreadInit\n" );
     if (pBTCpuThreadInit) pBTCpuThreadInit();
-    ERR( "FEXDBG: BTCpuThreadInit done\n" );
 
     /* update initial context to jump to 32-bit LdrInitializeThunk (cf. 32-bit call_init_thunk) */
     switch (current_machine)
@@ -1228,12 +1214,9 @@ __ASM_GLOBAL_FUNC( wow64_syscall_handler,
  */
 NTSTATUS WINAPI Wow64SystemServiceEx( UINT num, UINT *args )
 {
-    static int trace_count = 0;
     NTSTATUS status;
     UINT id = num & 0xfff;
     const SYSTEM_SERVICE_TABLE *table = &syscall_tables[(num >> 12) & 3];
-
-    if (trace_count < 20) { ERR( "FEXDBG: syscall %04x (id=%u, table=%u)\n", num, id, (num >> 12) & 3 ); trace_count++; }
 
     if (id >= table->ServiceLimit)
     {
@@ -1519,9 +1502,7 @@ void WINAPI Wow64LdrpInitialize( CONTEXT *context )
 
     RtlRunOnceExecuteOnce( &init_done, process_init, NULL, NULL );
     thread_init();
-    ERR( "FEXDBG: about to call cpu_simulate(), pBTCpuSimulate=%p\n", pBTCpuSimulate );
     cpu_simulate();
-    ERR( "FEXDBG: cpu_simulate() returned (should never happen)\n" );
 }
 
 

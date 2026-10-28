@@ -1165,39 +1165,6 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
     rec.ExceptionInformation[1] = (ULONG_PTR)siginfo->si_addr;
     rec.NumberParameters = 2;
 
-#if defined(__APPLE__) && defined(__aarch64__)
-    {
-        static int vkmt_fault_count = 0;
-        if (vkmt_fault_count < 10)
-        {
-            ERR( "VKMT segv: pc=%p addr=%p err=%llu sig=%d x28=%p lr=%p sp=%p\n",
-                 (void *)PC_sig(sigcontext), siginfo->si_addr,
-                 (unsigned long long)rec.ExceptionInformation[0], signal,
-                 (void *)REGn_sig(28, sigcontext),
-                 (void *)LR_sig(sigcontext),
-                 (void *)SP_sig(sigcontext) );
-            vkmt_fault_count++;
-        }
-    }
-#endif
-
-#if defined(__APPLE__) && defined(__aarch64__)
-    if (PC_sig(sigcontext) < 0x10000)
-    {
-        int i;
-        const unsigned int *w;
-        for (i = 0; i < 31; i += 3)
-            ERR( "VKMTDUMP x%d=%p x%d=%p x%d=%p\n", i, (void *)REGn_sig(i, sigcontext),
-                 i + 1, (void *)REGn_sig(i + 1, sigcontext), i + 2, (void *)REGn_sig(i + 2, sigcontext) );
-        w = (const unsigned int *)0x7fff9ff50000ULL;
-        for (i = 0; i < 192; i += 4)
-            ERR( "VKMTDUMP dispatcher@%p: %08x %08x %08x %08x\n", (void *)(w + i), w[i], w[i+1], w[i+2], w[i+3] );
-        w = (const unsigned int *)0x7fff75750000ULL;
-        for (i = 0; i < 24; i += 4)
-            ERR( "VKMTDUMP jit@%p: %08x %08x %08x %08x\n", (void *)(w + i), w[i], w[i+1], w[i+2], w[i+3] );
-    }
-#endif
-
     if (!virtual_handle_fault( data, &rec, (void *)SP_sig(sigcontext) )) return;
     if (handle_syscall_fault( data, sigcontext, &rec )) return;
 
