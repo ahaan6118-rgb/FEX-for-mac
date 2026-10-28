@@ -1750,7 +1750,17 @@ NTSTATUS WINAPI wow64_NtUserCallOneParam( UINT *args )
     ULONG_PTR arg = get_ulong( &args );
     ULONG code = get_ulong( &args );
 
-    return NtUserCallOneParam( arg, code );
+    switch (code)
+    {
+    case NtUserCallOneParam_GetPrimaryMonitorRect:
+    case NtUserCallOneParam_GetVirtualScreenRect:
+    case NtUserCallOneParam_GetAsyncKeyboardState:
+        /* the argument is a pointer to guest memory */
+        return NtUserCallOneParam( (ULONG_PTR)UlongToPtr( arg ), code );
+
+    default:
+        return NtUserCallOneParam( arg, code );
+    }
 }
 
 NTSTATUS WINAPI wow64_NtUserCallTwoParam( UINT *args )
@@ -1782,6 +1792,18 @@ NTSTATUS WINAPI wow64_NtUserCallTwoParam( UINT *args )
             if (info.fMask & MIM_STYLE)      info32->dwStyle = info.dwStyle;
             return TRUE;
         }
+
+    /* pointers to guest memory, which must be translated into the guest window */
+    case NtUserCallTwoParam_GetMonitorInfo:
+    case NtUserCallTwoParam_SetIconParam:
+        return NtUserCallTwoParam( arg1, (ULONG_PTR)UlongToPtr( arg2 ), code );
+
+    case NtUserCallTwoParam_MonitorFromRect:
+    case NtUserCallTwoParam_GetVirtualScreenRect:
+        return NtUserCallTwoParam( (ULONG_PTR)UlongToPtr( arg1 ), arg2, code );
+
+    case NtUserCallTwoParam_AdjustWindowRect:
+        return NtUserCallTwoParam( (ULONG_PTR)UlongToPtr( arg1 ), (ULONG_PTR)UlongToPtr( arg2 ), code );
 
     default:
         return NtUserCallTwoParam( arg1, arg2, code );
