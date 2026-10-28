@@ -4345,7 +4345,7 @@ void virtual_free_thread_data( struct thread_data *data )
         NtFreeVirtualMemory( GetCurrentProcess(), (void **)&teb->ChpeV2CpuAreaInfo, &size, MEM_RELEASE );
     }
 #endif
-    if ((wow_teb = get_wow_teb( teb )) && (ptr = ULongToPtr( wow_teb->DeallocationStack )))
+    if ((wow_teb = get_wow_teb( teb )) && (ptr = guest32_to_ptr( wow_teb->DeallocationStack )))
     {
         size = 0;
         NtFreeVirtualMemory( GetCurrentProcess(), &ptr, &size, MEM_RELEASE );
@@ -4541,7 +4541,7 @@ NTSTATUS virtual_clear_tls_index( ULONG index )
             if (wow_teb)
             {
                 if (wow_teb->TlsExpansionSlots)
-                    ((ULONG *)ULongToPtr( wow_teb->TlsExpansionSlots ))[index] = 0;
+                    ((ULONG *)guest32_to_ptr( wow_teb->TlsExpansionSlots ))[index] = 0;
             }
             else
 #endif
@@ -4719,9 +4719,9 @@ static BOOL is_inside_thread_stack( struct thread_data *data, void *ptr, struct 
     if ((char *)ptr > stack->start && (char *)ptr <= stack->end) return TRUE;
 
     if (!(wow_teb = get_wow_teb( teb ))) return FALSE;
-    stack->start = ULongToPtr( wow_teb->DeallocationStack );
-    stack->limit = ULongToPtr( wow_teb->Tib.StackLimit );
-    stack->end   = ULongToPtr( wow_teb->Tib.StackBase );
+    stack->start = guest32_to_ptr( wow_teb->DeallocationStack );
+    stack->limit = guest32_to_ptr( wow_teb->Tib.StackLimit );
+    stack->end   = guest32_to_ptr( wow_teb->Tib.StackBase );
     stack->guaranteed = max( wow_teb->GuaranteedStackBytes, min_guaranteed );
     stack->is_wow = TRUE;
     return ((char *)ptr > stack->start && (char *)ptr <= stack->end);
@@ -4752,7 +4752,7 @@ static NTSTATUS grow_thread_stack( struct thread_data *data, char *page, struct 
     if (stack_info->is_wow)
     {
         WOW_TEB *wow_teb = get_wow_teb( data->teb );
-        wow_teb->Tib.StackLimit = PtrToUlong( page );
+        wow_teb->Tib.StackLimit = ptr_to_guest32( page );
     }
     else data->teb->Tib.StackLimit = page;
     return ret;
