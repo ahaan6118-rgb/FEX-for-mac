@@ -13,11 +13,13 @@
 #include <FEXCore/Utils/LogManager.h>
 #include "macos_stubs.h"
 
+#include <atomic>
 #include <csetjmp>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <sys/mman.h>
 #include <sys/sysctl.h>
 #include <pthread.h>
@@ -38,12 +40,18 @@ struct PERange {
     uint64_t base;
     uint64_t end;
 };
-static PERange g_pe_ranges[16] = {};
-static int g_pe_range_count = 0;
+static constexpr int kMaxPERanges = 256;
+static PERange g_pe_ranges[kMaxPERanges] = {};
+static std::atomic<int> g_pe_range_count{0};
+static std::mutex g_pe_range_mutex;
 
 // Safe native call infrastructure — catch crashes in native function calls
 static thread_local sigjmp_buf tl_native_call_jmp;
 static thread_local bool tl_in_native_call = false;
+
+// Previous signal handlers — chained when fault is not during a native call
+static struct sigaction g_prev_sigsegv;
+static struct sigaction g_prev_sigbus;
 
 // Forward declaration — defined below
 struct ThreadHandle;
@@ -81,10 +89,24 @@ static void native_call_fault_handler(int sig, siginfo_t *info, void *ctx) {
             fprintf(stderr, "fexbridge: caught signal %d during native call, recovering\n", sig);
         siglongjmp(tl_native_call_jmp, sig);
     }
+    // Not our fault — chain to previous handler (Wine's, or default)
+    const struct sigaction& prev = (sig == SIGSEGV) ? g_prev_sigsegv : g_prev_sigbus;
+    if (prev.sa_flags & SA_SIGINFO) {
+        if (prev.sa_sigaction)
+            prev.sa_sigaction(sig, info, ctx);
+    } else {
+        if (prev.sa_handler == SIG_DFL) {
+            signal(sig, SIG_DFL);
+            raise(sig);
+        } else if (prev.sa_handler != SIG_IGN) {
+            prev.sa_handler(sig);
+        }
+    }
 }
 
 static bool is_pe_address(uint64_t addr) {
-    for (int i = 0; i < g_pe_range_count; i++) {
+    int count = g_pe_range_count.load(std::memory_order_acquire);
+    for (int i = 0; i < count; i++) {
         if (addr >= g_pe_ranges[i].base && addr < g_pe_ranges[i].end)
             return true;
     }
@@ -126,6 +148,26 @@ public:
         State.rip = *reinterpret_cast<const uint64_t*>(ctx + 0xF8);
     }
 
+    static void FillSyscallArgs(CPUState& State, uint64_t syscall_id, FEXBridgeSyscallArgs& sa) {
+        memset(&sa, 0, sizeof(sa));
+        sa.id = syscall_id;
+        sa.args[0] = State.gregs[FEXCore::X86State::REG_R10];
+        sa.args[1] = State.gregs[FEXCore::X86State::REG_RDX];
+        sa.args[2] = State.gregs[FEXCore::X86State::REG_R8];
+        sa.args[3] = State.gregs[FEXCore::X86State::REG_R9];
+        // Read stack-passed args only if the stack region is mapped
+        uint64_t rsp = State.gregs[FEXCore::X86State::REG_RSP];
+        char vec = 0;
+        uint64_t read_end = rsp + 13 * 8; // stack[0..12]
+        if (mincore(reinterpret_cast<void*>(rsp & ~0xFFFULL), 4096, &vec) == 0 &&
+            (((read_end - 1) & ~0xFFFULL) == (rsp & ~0xFFFULL) ||
+             mincore(reinterpret_cast<void*>((read_end - 1) & ~0xFFFULL), 4096, &vec) == 0)) {
+            auto* stack = reinterpret_cast<uint64_t*>(rsp);
+            for (int i = 0; i < 8; i++)
+                sa.args[4 + i] = stack[5 + i];
+        }
+    }
+
     void HandleSyscall(FEXCore::Core::CpuStateFrame* Frame) override {
         auto& State = Frame->State;
         uint64_t syscall_id = State.gregs[FEXCore::X86State::REG_RAX];
@@ -149,29 +191,18 @@ public:
             return;
         }
 
-        // Win32u (table 1) syscalls: defer to outside ExecuteThread so that
-        // KeUserModeCallback can safely re-enter the JIT for callbacks.
-        {
-            uint32_t table_idx = (static_cast<uint32_t>(syscall_id) >> 12) & 3;
-            if (table_idx == 1 && g_hlt_page_addr) {
-                tl_deferred_syscall = true;
-                tl_deferred_args.id = syscall_id;
-                tl_deferred_args.args[0] = State.gregs[FEXCore::X86State::REG_R10];
-                tl_deferred_args.args[1] = State.gregs[FEXCore::X86State::REG_RDX];
-                tl_deferred_args.args[2] = State.gregs[FEXCore::X86State::REG_R8];
-                tl_deferred_args.args[3] = State.gregs[FEXCore::X86State::REG_R9];
-                auto* stack = reinterpret_cast<uint64_t*>(
-                    State.gregs[FEXCore::X86State::REG_RSP]);
-                for (int i = 0; i < 8; i++)
-                    tl_deferred_args.args[4 + i] = stack[5 + i];
-                tl_deferred_return_addr = return_addr;
-                if (getenv("FEXBRIDGE_TRACE"))
-                    fprintf(stderr, "fexbridge: deferring win32u syscall 0x%llx (table=%u num=%u)\n",
-                            (unsigned long long)syscall_id, table_idx,
-                            static_cast<uint32_t>(syscall_id) & 0xfff);
-                State.rip = g_hlt_page_addr;
-                return;
-            }
+        // Win32u (table 1) syscalls are deferred: exit ExecuteThread via the HLT
+        // page so KeUserModeCallback can safely re-enter the JIT.
+        if (tl_syscall_cb && g_hlt_page_addr &&
+            ((static_cast<uint32_t>(syscall_id) >> 12) & 3) == 1) {
+            FillSyscallArgs(State, syscall_id, tl_deferred_args);
+            tl_deferred_return_addr = return_addr;
+            tl_deferred_syscall = true;
+            if (getenv("FEXBRIDGE_TRACE"))
+                fprintf(stderr, "fexbridge: deferring win32u syscall 0x%llx\n",
+                        (unsigned long long)syscall_id);
+            State.rip = g_hlt_page_addr;
+            return;
         }
 
         /* NtContinue (0x43): restore x86_64 context and redirect JIT.
@@ -221,14 +252,7 @@ public:
 
         if (tl_syscall_cb) {
             FEXBridgeSyscallArgs sa;
-            sa.id = syscall_id;
-            sa.args[0] = State.gregs[FEXCore::X86State::REG_R10];
-            sa.args[1] = State.gregs[FEXCore::X86State::REG_RDX];
-            sa.args[2] = State.gregs[FEXCore::X86State::REG_R8];
-            sa.args[3] = State.gregs[FEXCore::X86State::REG_R9];
-            auto* stack = reinterpret_cast<uint64_t*>(State.gregs[FEXCore::X86State::REG_RSP]);
-            for (int i = 0; i < 8; i++)
-                sa.args[4 + i] = stack[5 + i];
+            FillSyscallArgs(State, syscall_id, sa);
             uint64_t result = tl_syscall_cb(&sa, tl_user_data);
             State.gregs[FEXCore::X86State::REG_RAX] = result;
         } else {
@@ -300,6 +324,8 @@ int fexbridge_init(void) {
 
     // Configure for 64-bit mode
     FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_IS64BIT_MODE, "1");
+    // Software TSO barriers disabled — hardware TSO is enabled below via
+    // _pthread_set_properties_self, which makes the JIT skip memory barriers.
     FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_TSOENABLED, "0");
     FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_VECTORTSOENABLED, "0");
     FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_MEMCPYSETTSOENABLED, "0");
@@ -317,9 +343,23 @@ int fexbridge_init(void) {
     g_CTX->SetSignalDelegator(g_SignalDelegator.get());
     g_CTX->SetSyscallHandler(g_SyscallHandler.get());
     g_CTX->EnableExitOnHLT();
+
+    // Enable per-thread hardware TSO so the JIT skips memory barriers
+    extern int _pthread_set_properties_self(int flag, long long val, long long unused);
+    if (_pthread_set_properties_self(4, 1, 0) == 0)
+        g_CTX->SetHardwareTSOSupport(true);
+
     g_CTX->InitCore();
 
     SetupGDT();
+
+    // Install signal handler for native call crash recovery, chaining to previous
+    struct sigaction sa{};
+    sa.sa_sigaction = native_call_fault_handler;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, &g_prev_sigsegv);
+    sigaction(SIGBUS, &sa, &g_prev_sigbus);
 
     // Allocate HLT page for clean JIT exit during deferred syscalls.
     // Registered as PE range so FEXCore compiles HLT and EnableExitOnHLT fires.
@@ -327,12 +367,15 @@ int fexbridge_init(void) {
                           MAP_PRIVATE | MAP_ANON, -1, 0);
     if (hlt_page != MAP_FAILED) {
         static_cast<uint8_t*>(hlt_page)[0] = 0xF4; // x86_64 HLT
-        mprotect(hlt_page, 4096, PROT_READ);
+        if (mprotect(hlt_page, 4096, PROT_READ | PROT_EXEC) != 0)
+            mprotect(hlt_page, 4096, PROT_READ);
         g_hlt_page_addr = reinterpret_cast<uint64_t>(hlt_page);
-        if (g_pe_range_count < 16) {
-            g_pe_ranges[g_pe_range_count].base = g_hlt_page_addr;
-            g_pe_ranges[g_pe_range_count].end = g_hlt_page_addr + 4096;
-            g_pe_range_count++;
+        std::lock_guard<std::mutex> lock(g_pe_range_mutex);
+        int idx = g_pe_range_count.load(std::memory_order_relaxed);
+        if (idx < kMaxPERanges) {
+            g_pe_ranges[idx].base = g_hlt_page_addr;
+            g_pe_ranges[idx].end = g_hlt_page_addr + 4096;
+            g_pe_range_count.store(idx + 1, std::memory_order_release);
         }
     }
 
@@ -378,6 +421,10 @@ int fexbridge_execute(void* thread_handle,
                       FEXBridgeSyscallCallback syscall_cb,
                       void* user_data) {
     if (!thread_handle || !ctx) return -1;
+
+    // Enable per-thread hardware TSO on this Wine thread
+    extern int _pthread_set_properties_self(int flag, long long val, long long unused);
+    _pthread_set_properties_self(4, 1, 0);
 
     auto* handle = static_cast<ThreadHandle*>(thread_handle);
     auto* Thread = handle->thread;
@@ -438,24 +485,38 @@ int fexbridge_execute(void* thread_handle,
             if (getenv("FEXBRIDGE_TRACE"))
                 fprintf(stderr, "fexbridge: processing deferred syscall 0x%llx\n",
                         (unsigned long long)tl_deferred_args.id);
-            uint64_t result = tl_syscall_cb(&tl_deferred_args, tl_user_data);
+            uint64_t result = tl_syscall_cb ? tl_syscall_cb(&tl_deferred_args, tl_user_data) : 0xC0000001ULL;
             State.gregs[FEXCore::X86State::REG_RAX] = result;
             State.rip = tl_deferred_return_addr;
 #ifdef __APPLE__
             pthread_jit_write_protect_np(false);
 #endif
+            native_calls--; // deferred syscalls must not consume the native-call budget
             continue;
         }
 
         // If RIP is still in PE range (or is a HLT), execution ended normally
-        if (is_pe_address(State.rip) || g_pe_range_count == 0)
+        if (is_pe_address(State.rip) || g_pe_range_count.load(std::memory_order_acquire) == 0)
             break;
 
         // RIP landed on a native ARM64 address — FEXCore couldn't decode it.
         // This means x86_64 code did `call native_addr`.
         // The return address was pushed on the x86_64 stack by the CALL instruction.
         uint64_t native_target = State.rip;
-        auto* guest_stack = reinterpret_cast<uint64_t*>(State.gregs[FEXCore::X86State::REG_RSP]);
+        uint64_t rsp_val = State.gregs[FEXCore::X86State::REG_RSP];
+
+        // Validate guest stack is mapped before reading (9 uint64_t: ret + 8 args)
+        {
+            char vec = 0;
+            if (mincore(reinterpret_cast<void*>(rsp_val & ~0xFFFULL), 4096, &vec) != 0) {
+                if (getenv("FEXBRIDGE_TRACE"))
+                    fprintf(stderr, "fexbridge: guest stack at 0x%llx not mapped, aborting\n",
+                            (unsigned long long)rsp_val);
+                break;
+            }
+        }
+
+        auto* guest_stack = reinterpret_cast<uint64_t*>(rsp_val);
         uint64_t return_addr = guest_stack[0];
 
         if (getenv("FEXBRIDGE_TRACE")) {
@@ -474,16 +535,9 @@ int fexbridge_execute(void* thread_handle,
                     (unsigned long long)guest_stack[1],
                     (unsigned long long)guest_stack[2],
                     (unsigned long long)guest_stack[3]);
-            // Try to read bytes at the target to see if it's ARM64 or garbage
-            uint8_t *probe = (uint8_t *)native_target;
-            int readable = 0;
-            // Use a signal-safe probe
             uint8_t buf[8] = {};
-            volatile uint8_t *vp = (volatile uint8_t *)native_target;
-            // mincore check
             char vec = 0;
             if (mincore((void *)((uintptr_t)native_target & ~0xFFFUL), 4096, &vec) == 0) {
-                readable = 1;
                 memcpy(buf, (void *)native_target, 8);
                 fprintf(stderr, "fexbridge:   target bytes: %02x %02x %02x %02x %02x %02x %02x %02x (page resident=%d)\n",
                         buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], (int)(vec & 1));
@@ -615,8 +669,26 @@ int64_t fexbridge_run_callback(
     //   0x30: machine_frame (rip, cs, eflags, rsp, ss)
     //   0x58: args_data[len]
     uint64_t orig_rsp = State.gregs[FEXCore::X86State::REG_RSP];
+    if (len > 16 * 1024 * 1024) {
+        fprintf(stderr, "fexbridge: callback args too large (%u bytes)\n", len);
+        return 0xC0000001LL;
+    }
     uint64_t stack_size = ((0x58 + len + 15) & ~15ULL) + 8; // +8 for 16-byte alignment before call
     uint64_t new_rsp = (orig_rsp - stack_size) & ~15ULL;
+
+    // Verify the callback stack region is mapped before writing
+    {
+        char vec = 0;
+        uint64_t page_start = new_rsp & ~0xFFFULL;
+        uint64_t page_end = (new_rsp + 0x58 + len + 0xFFF) & ~0xFFFULL;
+        for (uint64_t p = page_start; p < page_end; p += 4096) {
+            if (mincore(reinterpret_cast<void*>(p), 4096, &vec) != 0) {
+                fprintf(stderr, "fexbridge: callback stack not mapped at 0x%llx\n",
+                        (unsigned long long)p);
+                return 0xC0000001LL;
+            }
+        }
+    }
 
     auto* stack = reinterpret_cast<uint8_t*>(new_rsp);
     memset(stack, 0, 0x58);
@@ -669,12 +741,13 @@ int64_t fexbridge_run_callback(
             if (getenv("FEXBRIDGE_TRACE"))
                 fprintf(stderr, "fexbridge: callback: processing deferred syscall 0x%llx\n",
                         (unsigned long long)tl_deferred_args.id);
-            uint64_t result = tl_syscall_cb(&tl_deferred_args, tl_user_data);
+            uint64_t result = tl_syscall_cb ? tl_syscall_cb(&tl_deferred_args, tl_user_data) : 0xC0000001ULL;
             State.gregs[FEXCore::X86State::REG_RAX] = result;
             State.rip = tl_deferred_return_addr;
 #ifdef __APPLE__
             pthread_jit_write_protect_np(false);
 #endif
+            iters--; // deferred syscalls must not consume the iteration budget
             continue;
         }
 
@@ -684,8 +757,13 @@ int64_t fexbridge_run_callback(
 
         // Native call bridge — same logic as fexbridge_execute
         uint64_t native_target = State.rip;
-        auto* guest_stack = reinterpret_cast<uint64_t*>(
-            State.gregs[FEXCore::X86State::REG_RSP]);
+        uint64_t cb_rsp = State.gregs[FEXCore::X86State::REG_RSP];
+        {
+            char vec = 0;
+            if (mincore(reinterpret_cast<void*>(cb_rsp & ~0xFFFULL), 4096, &vec) != 0)
+                break;
+        }
+        auto* guest_stack = reinterpret_cast<uint64_t*>(cb_rsp);
         uint64_t ret_addr = guest_stack[0];
 
         char vec = 0;
@@ -748,13 +826,19 @@ int64_t fexbridge_run_callback(
 }
 
 void fexbridge_add_pe_range(uint64_t base, uint64_t size) {
-    if (g_pe_range_count < 16) {
-        g_pe_ranges[g_pe_range_count].base = base;
-        g_pe_ranges[g_pe_range_count].end = base + size;
-        g_pe_range_count++;
+    std::lock_guard<std::mutex> lock(g_pe_range_mutex);
+    int idx = g_pe_range_count.load(std::memory_order_relaxed);
+    if (idx < kMaxPERanges) {
+        g_pe_ranges[idx].base = base;
+        g_pe_ranges[idx].end = base + size;
+        g_pe_range_count.store(idx + 1, std::memory_order_release);
         if (getenv("FEXBRIDGE_TRACE"))
-            fprintf(stderr, "fexbridge: registered PE range 0x%llx - 0x%llx\n",
-                    (unsigned long long)base, (unsigned long long)(base + size));
+            fprintf(stderr, "fexbridge: registered PE range 0x%llx - 0x%llx (%d/%d)\n",
+                    (unsigned long long)base, (unsigned long long)(base + size),
+                    idx + 1, kMaxPERanges);
+    } else {
+        fprintf(stderr, "fexbridge: PE range table full (%d), ignoring 0x%llx\n",
+                kMaxPERanges, (unsigned long long)base);
     }
 }
 
@@ -786,9 +870,19 @@ uint64_t fexbridge_get_stop_address(void) {
 void fexbridge_shutdown(void) {
     if (!g_initialized) return;
 
+    // Restore previous signal handlers before tearing down
+    sigaction(SIGSEGV, &g_prev_sigsegv, nullptr);
+    sigaction(SIGBUS, &g_prev_sigbus, nullptr);
+
     g_SyscallHandler.reset();
     g_SignalDelegator.reset();
     g_CTX.reset();
+
+    if (g_hlt_page_addr) {
+        munmap(reinterpret_cast<void*>(g_hlt_page_addr), 4096);
+        g_hlt_page_addr = 0;
+    }
+    g_pe_range_count.store(0, std::memory_order_relaxed);
     g_initialized = false;
 }
 
