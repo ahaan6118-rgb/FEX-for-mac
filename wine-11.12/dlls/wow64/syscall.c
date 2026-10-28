@@ -681,7 +681,9 @@ NTSTATUS WINAPI wow64_NtClose( UINT *args )
 NTSTATUS WINAPI wow64_NtContinueEx( UINT *args )
 {
     void *context = get_ptr( &args );
-    KCONTINUE_ARGUMENT *cont_args = get_ptr( &args );
+    /* either a BOOLEAN (TestAlert) or a pointer: only translate real pointers into the guest window */
+    ULONG cont_args32 = get_ulong( &args );
+    KCONTINUE_ARGUMENT *cont_args = cont_args32 > 0xff ? guest_ptr32( cont_args32 ) : (KCONTINUE_ARGUMENT *)(ULONG_PTR)cont_args32;
 
     NTSTATUS status = get_context_return_value( context );
     struct user_apc_frame *frame = NtCurrentTeb()->TlsSlots[WOW64_TLS_APCLIST];
