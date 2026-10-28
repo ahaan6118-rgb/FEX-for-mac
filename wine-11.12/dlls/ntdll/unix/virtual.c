@@ -4209,6 +4209,15 @@ TEB *virtual_alloc_first_teb(void)
             virtual_add_guest_window( gw, (size_t)1 << 32 );
         }
     }
+    if (wow_guest_window_base)
+    {
+        /* 32-bit code reads KUSER_SHARED_DATA at 0x7ffe0000; reserve it before the TEBs are placed
+         * top-down below it, as on Windows. virtual_map_user_shared_data() maps the real page. */
+        void *guest_usd = (void *)(wow_guest_window_base + 0x7ffe0000);
+        SIZE_T guest_usd_size = page_size;
+        NtAllocateVirtualMemory( NtCurrentProcess(), &guest_usd, 0, &guest_usd_size,
+                                 MEM_RESERVE | MEM_COMMIT, PAGE_READONLY );
+    }
     NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, wow_guest_window_base ? limit_2g - 1 : 0, &total,
                              MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE );
 #else
@@ -4619,6 +4628,13 @@ void virtual_map_user_shared_data(void)
         ERR( "failed to remap the process USD: %d\n", res );
         exit(1);
     }
+#if defined(__APPLE__) && defined(__aarch64__)
+    if (wow_guest_window_base)
+    {
+        /* the page was reserved in virtual_alloc_first_teb() */
+        mmap( (void *)(wow_guest_window_base + 0x7ffe0000), page_size, PROT_READ, MAP_SHARED|MAP_FIXED, fd, 0 );
+    }
+#endif
     if (needs_close) close( fd );
     NtClose( section );
 }

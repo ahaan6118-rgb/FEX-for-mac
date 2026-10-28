@@ -114,6 +114,7 @@ static void     (WINAPI *pBTCpuProcessInit)(void);
 static NTSTATUS (WINAPI *pBTCpuSetContext)(HANDLE,HANDLE,void *,void *);
 static void     (WINAPI *pBTCpuThreadInit)(void);
 static void     (WINAPI *pBTCpuSimulate)(void) __attribute__((used));
+static void     (WINAPI *pBTCpuUserCallbackReturn)(void) = NULL;  /* optional (FEX for Mac) */
 static void *   (WINAPI *p__wine_get_unix_opcode)(void);
 static void *   (WINAPI *pKiRaiseUserExceptionDispatcher)(void);
 void     (WINAPI *pBTCpuFlushInstructionCache2)( const void *, SIZE_T ) = NULL;
@@ -659,6 +660,7 @@ NTSTATUS WINAPI wow64_NtCallbackReturn( UINT *args )
     *frame->ret_ptr = ret_ptr;
     *frame->ret_len = ret_len;
     frame->status = status;
+    if (pBTCpuUserCallbackReturn) pBTCpuUserCallbackReturn();
     longjmp( frame->jmpbuf, 1 );
     return STATUS_SUCCESS;
 }
@@ -1033,6 +1035,7 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
     GET_PTR( BTCpuResetToConsistentState );
     GET_PTR( BTCpuSetContext );
     GET_PTR( BTCpuSimulate );
+    GET_PTR( BTCpuUserCallbackReturn );
     GET_PTR( BTCpuFlushInstructionCache2 );
     GET_PTR( BTCpuFlushInstructionCacheHeavy );
     GET_PTR( BTCpuNotifyMapViewOfSection );
@@ -1226,6 +1229,7 @@ NTSTATUS WINAPI Wow64SystemServiceEx( UINT num, UINT *args )
         return STATUS_INVALID_SYSTEM_SERVICE;
     }
     status = wow64_syscall( args, table->ServiceTable[id] );
+    if (NtCurrentTeb()->TlsSlots[WOW64_TLS_USERCALLBACKDATA] && status)
     free_temp_data();
     return status;
 }
