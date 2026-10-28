@@ -47,8 +47,12 @@ static inline void *wow_to_host( ULONG addr )
 
 static inline ULONG wow_to_guest( const void *ptr )
 {
-    ULONG_PTR addr = (ULONG_PTR)ptr;
-    return addr < 0x10000 ? (ULONG)addr : (ULONG)(addr - wow_win_base());
+    ULONG_PTR addr = (ULONG_PTR)ptr, base = wow_win_base();
+
+    /* Only addresses inside the window are host pointers. Anything else (atoms, resource ids and
+     * guest addresses that went through win32u as opaque values) is already in guest form. */
+    if (base && addr >= base && addr - base < ((ULONG_PTR)1 << 32)) return (ULONG)(addr - base);
+    return (ULONG)addr;
 }
 
 #undef ULongToPtr

@@ -1711,6 +1711,17 @@ NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
             return NtUserCallHwndParam( hwnd, (UINT_PTR)&params, code );
         }
 
+    /* the parameter is a pointer to guest memory */
+    case NtUserCallHwndParam_ClientToScreen:
+    case NtUserCallHwndParam_ScreenToClient:
+    case NtUserCallHwndParam_GetChildRect:
+    case NtUserCallHwndParam_GetWindowInfo:
+    case NtUserCallHwndParam_GetPresentRect:
+    case NtUserCallHwndParam_GetWindowThread:
+    case NtUserCallHwndParam_GetPrivateData:
+    case NtUserCallHwndParam_SetPrivateData:
+        return NtUserCallHwndParam( hwnd, (UINT_PTR)UlongToPtr( param ), code );
+
     default:
         return NtUserCallHwndParam( hwnd, param, code );
     }
@@ -3418,9 +3429,87 @@ NTSTATUS WINAPI wow64_NtUserMessageBeep( UINT *args )
     return NtUserMessageBeep( type );
 }
 
+/* From win32u/message.c: messages whose lparam points to guest memory when sent from a 32-bit process. */
+/* flag for messages that contain pointers */
+/* 32 messages per entry, messages 0..31 map to bits 0..31 */
+
+#define SET(msg) (1 << ((msg) & 31))
+
+static const unsigned int wow_message_pointer_flags[] =
+{
+    /* 0x00 - 0x1f */
+    SET(WM_CREATE) | SET(WM_SETTEXT) | SET(WM_GETTEXT) |
+    SET(WM_WININICHANGE) | SET(WM_DEVMODECHANGE),
+    /* 0x20 - 0x3f */
+    SET(WM_GETMINMAXINFO) | SET(WM_DRAWITEM) | SET(WM_MEASUREITEM) | SET(WM_DELETEITEM) |
+    SET(WM_COMPAREITEM),
+    /* 0x40 - 0x5f */
+    SET(WM_WINDOWPOSCHANGING) | SET(WM_WINDOWPOSCHANGED) | SET(WM_COPYDATA) | SET(WM_HELP),
+    /* 0x60 - 0x7f */
+    SET(WM_STYLECHANGING) | SET(WM_STYLECHANGED),
+    /* 0x80 - 0x9f */
+    SET(WM_NCCREATE) | SET(WM_NCCALCSIZE) | SET(WM_GETDLGCODE),
+    /* 0xa0 - 0xbf */
+    SET(EM_GETSEL) | SET(EM_GETRECT) | SET(EM_SETRECT) | SET(EM_SETRECTNP),
+    /* 0xc0 - 0xdf */
+    SET(EM_REPLACESEL) | SET(EM_GETLINE) | SET(EM_SETTABSTOPS),
+    /* 0xe0 - 0xff */
+    SET(SBM_GETRANGE) | SET(SBM_SETSCROLLINFO) | SET(SBM_GETSCROLLINFO) | SET(SBM_GETSCROLLBARINFO),
+    /* 0x100 - 0x11f */
+    0,
+    /* 0x120 - 0x13f */
+    0,
+    /* 0x140 - 0x15f */
+    SET(CB_GETEDITSEL) | SET(CB_ADDSTRING) | SET(CB_DIR) | SET(CB_GETLBTEXT) |
+    SET(CB_INSERTSTRING) | SET(CB_FINDSTRING) | SET(CB_SELECTSTRING) |
+    SET(CB_GETDROPPEDCONTROLRECT) | SET(CB_FINDSTRINGEXACT),
+    /* 0x160 - 0x17f */
+    SET(CB_GETCOMBOBOXINFO),
+    /* 0x180 - 0x19f */
+    SET(LB_ADDSTRING) | SET(LB_INSERTSTRING) | SET(LB_GETTEXT) | SET(LB_SELECTSTRING) |
+    SET(LB_DIR) | SET(LB_FINDSTRING) |
+    SET(LB_GETSELITEMS) | SET(LB_SETTABSTOPS) | SET(LB_ADDFILE) | SET(LB_GETITEMRECT),
+    /* 0x1a0 - 0x1bf */
+    SET(LB_FINDSTRINGEXACT),
+    /* 0x1c0 - 0x1df */
+    0,
+    /* 0x1e0 - 0x1ff */
+    0,
+    /* 0x200 - 0x21f */
+    SET(WM_NEXTMENU) | SET(WM_SIZING) | SET(WM_MOVING) | SET(WM_DEVICECHANGE),
+    /* 0x220 - 0x23f */
+    SET(WM_MDICREATE) | SET(WM_MDIGETACTIVE) | SET(WM_DROPOBJECT) |
+    SET(WM_QUERYDROPOBJECT) | SET(WM_DRAGLOOP) | SET(WM_DRAGSELECT) | SET(WM_DRAGMOVE),
+    /* 0x240 - 0x25f */
+    0,
+    /* 0x260 - 0x27f */
+    0,
+    /* 0x280 - 0x29f */
+    0,
+    /* 0x2a0 - 0x2bf */
+    0,
+    /* 0x2c0 - 0x2df */
+    0,
+    /* 0x2e0 - 0x2ff */
+    0,
+    /* 0x300 - 0x31f */
+    SET(WM_ASKCBFORMATNAME)
+};
+
+/* check whether a given message type includes pointers */
+static inline BOOL wow_is_pointer_message( UINT message, WPARAM wparam )
+{
+    if (message >= 8*sizeof(wow_message_pointer_flags)) return FALSE;
+    if (message == WM_DEVICECHANGE && !(wparam & 0x8000)) return FALSE;
+    return (wow_message_pointer_flags[message / 32] & SET(message)) != 0;
+}
+
+#undef SET
+
 static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,
                                     void *result_info, DWORD type, BOOL ansi )
 {
+    LPARAM plparam = wow_is_pointer_message( msg, wparam ) ? (LPARAM)wow_to_host( (ULONG)lparam ) : lparam;
     LRESULT ret = 0;
 
     switch (msg)
@@ -3446,7 +3535,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             cs32->dwExStyle      = cs.dwExStyle;
             return ret;
         }
-        return NtUserMessageCall( hwnd, msg, wparam, lparam, result_info, type, ansi );
+        return NtUserMessageCall( hwnd, msg, wparam, plparam, result_info, type, ansi );
 
     case WM_MDICREATE:
         {
@@ -3497,7 +3586,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             winpos_64to32( &winpos, UlongToPtr( params32->lppos ));
             return ret;
         }
-        return NtUserMessageCall( hwnd, msg, wparam, lparam, result_info, type, ansi );
+        return NtUserMessageCall( hwnd, msg, wparam, plparam, result_info, type, ansi );
 
     case WM_COMPAREITEM:
         {
@@ -3603,7 +3692,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             return NtUserMessageCall( hwnd, msg, wparam, (LPARAM)msg_32to64( &msg64, msg32 ),
                                       result_info, type, ansi );
         }
-        return NtUserMessageCall( hwnd, msg, wparam, lparam, result_info, type, ansi );
+        return NtUserMessageCall( hwnd, msg, wparam, plparam, result_info, type, ansi );
 
     case WM_NEXTMENU:
         {
@@ -3652,7 +3741,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         }
 
     default:
-        return NtUserMessageCall( hwnd, msg, wparam, lparam, result_info, type, ansi );
+        return NtUserMessageCall( hwnd, msg, wparam, plparam, result_info, type, ansi );
     }
 }
 
