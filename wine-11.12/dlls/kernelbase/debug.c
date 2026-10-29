@@ -525,10 +525,14 @@ static void format_exception_msg( const EXCEPTION_POINTERS *ptr, char *buffer, i
     len += snprintf( buffer + len,  size - len, " at address %p", ptr->ExceptionRecord->ExceptionAddress );
     {
         void *base;
+        WCHAR name[MAX_PATH];
         UNICODE_STRING path;
+        path.Buffer = name;
+        path.Length = 0;
+        path.MaximumLength = sizeof(name);
         if (len > 0 && len < size && RtlPcToFileHeader( ptr->ExceptionRecord->ExceptionAddress, &base ) &&
             !LdrGetDllFullName( base, &path ))
-            snprintf( buffer + len, size - len, " in %ls+%#lx", path.Buffer,
+            snprintf( buffer + len, size - len, " in %.*ls+%#lx", (int)(path.Length / sizeof(WCHAR)), path.Buffer,
                       (ULONG)((char *)ptr->ExceptionRecord->ExceptionAddress - (char *)base) );
     }
 }

@@ -241,6 +241,28 @@ NTSTATUS WINAPI dispatch_exception( EXCEPTION_RECORD *rec, CONTEXT *context )
     NTSTATUS status;
     DWORD i;
 
+#ifdef __i386__
+    if (rec->ExceptionCode == EXCEPTION_BREAKPOINT && rec->ExceptionAddress)
+    {
+        /* walk the frame chain, staying inside the thread's own stack */
+        ULONG_PTR low = (ULONG_PTR)NtCurrentTeb()->DeallocationStack, high = (ULONG_PTR)NtCurrentTeb()->Tib.StackBase;
+        DWORD *frame = (DWORD *)context->Ebp;
+        int n;
+        {
+            DWORD *arg = (DWORD *)context->Ebp;
+            if (!((ULONG_PTR)arg & 3) && (ULONG_PTR)arg >= low && (ULONG_PTR)arg < high - 32)
+                ERR( "BP args: %08lx %08lx %08lx %08lx %08lx\n", arg[2], arg[3], arg[4], arg[5], arg[6] );
+        }
+        ERR( "BP at %08lx esp %08lx ebp %08lx frames:", context->Eip, context->Esp, context->Ebp );
+        for (n = 0; n < 16 && !((ULONG_PTR)frame & 3) && (ULONG_PTR)frame >= low && (ULONG_PTR)frame < high - 8; n++)
+        {
+            ERR( " %08lx", frame[1] );
+            frame = (DWORD *)frame[0];
+        }
+        ERR( "\n" );
+    }
+#endif
+
     switch (rec->ExceptionCode)
     {
     case EXCEPTION_WINE_STUB:

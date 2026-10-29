@@ -2343,7 +2343,8 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
         }
         if (limit_high && limit_high <= (ULONG_PTR)0xFFFFFFFF)
         {
-            limit_low = wow_guest_window_base + limit_low;
+            /* never hand out the first 64K of the guest space (NULL page) */
+            limit_low = wow_guest_window_base + (limit_low > 0x10000 ? limit_low : 0x10000);
             limit_high = wow_guest_window_base + limit_high;
             gw_translated = 1;
         }
