@@ -752,6 +752,21 @@ static NTSTATUS unix_getaddrinfo( void *args )
         }
     }
 
+#ifdef __APPLE__
+    /* macOS resolves this machine's own "<name>.local" through mDNS when it is not in /etc/hosts
+     * and waits about five seconds for every call, which stalls programs that look up their own
+     * name at startup (Chromium does it many times). Fail fast; the caller then falls back to a
+     * NULL-host lookup, exactly as it does when the name cannot be resolved. */
+    if (params->node && !(unix_hints.ai_flags & AI_NUMERICHOST))
+    {
+        char host[256];
+        size_t len = strlen( params->node );
+        if (!gethostname( host, sizeof(host) - 1 ) && len &&
+            !strncasecmp( host, params->node, len ) && (!host[len] || host[len] == '.'))
+            return addrinfo_err_from_unix( EAI_NONAME );
+    }
+#endif
+
     ret = getaddrinfo( params->node, service, hints ? &unix_hints : NULL, &unix_info );
     if (ret)
         return addrinfo_err_from_unix( ret );
