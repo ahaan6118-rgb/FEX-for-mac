@@ -77,6 +77,12 @@ static inline void *copy_wow64_ptr32s( UINT_PTR address, ULONG count )
     return tmp;
 }
 
+/* void * arguments below the user-address floor are buffer-object offsets, not pointers */
+static inline void *wow_to_host_off( ULONG addr )
+{
+    return addr < 0x10000 ? (void *)(ULONG_PTR)addr : wow_to_host( addr );
+}
+
 static inline TEB *get_teb64( ULONG teb32 )
 {
     TEB32 *teb32_ptr = wow_to_host( teb32 );

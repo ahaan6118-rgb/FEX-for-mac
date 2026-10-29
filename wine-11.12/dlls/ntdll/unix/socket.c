@@ -1668,6 +1668,9 @@ NTSTATUS sock_ioctl( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc
             struct afd_get_events_params *params = out_buffer;
             HANDLE reset_event = in_buffer; /* sic */
 
+            /* the "buffer" is a handle value; undo the guest window offset added by wow64 */
+            if (in_wow64_call() && in_buffer) reset_event = (HANDLE)(ULONG_PTR)ptr_to_guest32( in_buffer );
+
             TRACE( "reset_event %p\n", reset_event );
             if (in_size) FIXME( "unexpected input size %u\n", in_size );
 
