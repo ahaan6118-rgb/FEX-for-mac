@@ -42,7 +42,9 @@ static inline ULONG_PTR wow_win_base(void)
 
 static inline void *wow_to_host( ULONG addr )
 {
-    return addr < 0x10000 ? (void *)(ULONG_PTR)addr : (void *)(wow_win_base() + addr);
+    /* below 0x10000: atoms, resource ids; 0xffffXXXX: window procedure handles (never valid memory) */
+    if (addr < 0x10000 || (addr >> 16) == 0xffff) return (void *)(ULONG_PTR)addr;
+    return (void *)(wow_win_base() + addr);
 }
 
 static inline ULONG wow_to_guest( const void *ptr )
