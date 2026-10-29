@@ -3,7 +3,9 @@
  *
  * A 32-bit pointer is an offset into the window that starts at the host address reported by
  * ProcessWineIosWowGuestBase (0 = identity mapping). Including this header makes ULongToPtr()
- * and PtrToUlong() translate accordingly.
+ * and PtrToUlong() translate accordingly, unless WOW_GUEST_NO_REDIRECT is defined first (for
+ * libraries where some of those conversions are not guest pointers); then use wow_to_host()
+ * and wow_to_guest() explicitly.
  */
 #ifndef __WINE_WOW_GUEST_H
 #define __WINE_WOW_GUEST_H
@@ -35,12 +37,14 @@ static inline ULONG wow_to_guest( const void *ptr )
     return (ULONG)addr;
 }
 
+#ifndef WOW_GUEST_NO_REDIRECT
 #undef ULongToPtr
 #undef UlongToPtr
 #undef PtrToUlong
 #define ULongToPtr(x) wow_to_host(x)
 #define UlongToPtr(x) wow_to_host(x)
 #define PtrToUlong(x) wow_to_guest(x)
+#endif
 
 #endif /* __APPLE__ */
 #endif /* __WINE_WOW_GUEST_H */
