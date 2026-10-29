@@ -1766,6 +1766,7 @@ NTSTATUS WINAPI wow64_NtUserCallOneParam( UINT *args )
     case NtUserCallOneParam_GetPrimaryMonitorRect:
     case NtUserCallOneParam_GetVirtualScreenRect:
     case NtUserCallOneParam_GetAsyncKeyboardState:
+    case NtUserCallOneParam_D3DKMTOpenAdapterFromGdiDisplayName:
         /* the argument is a pointer to guest memory */
         return NtUserCallOneParam( (ULONG_PTR)UlongToPtr( arg ), code );
 
