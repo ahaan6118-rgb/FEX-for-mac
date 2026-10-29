@@ -11,7 +11,9 @@ unixlib.h.
   * void * argument             -> wow_to_host_off(): values below the 64K user-address floor are
                                    buffer-object offsets (glDrawElements, glVertexAttribPointer,
                                    PBO uploads) and are passed through unchanged
-  * handles, GLsync, intptr/sizeiptr -> untouched
+  * HGLRC, HPBUFFERARB, GLsync   -> wow_to_host(): these are pointers to client objects that live in
+                                   the 32-bit program's heap and are dereferenced on the unix side
+  * HDC and other handles, intptr/sizeiptr -> untouched
 
 Run from the repository root after regenerating unix_thunks.c; it is idempotent.
 """
@@ -39,12 +41,12 @@ for m in re.finditer(r"struct (\w+)_params\s*\{(.*?)\n\};", lib, re.S):
 src = open(thunks_path).read()
 func_re = re.compile(r"^static NTSTATUS wow64_(\w+)\( void \*args \)\n\{\n.*?^\}\n", re.S | re.M)
 conv_re = re.compile(r"\bUL(?:ong|ONG)ToPtr\(params->(\w+)\)", re.I)
-count = {"ptr": 0, "off": 0, "keep": 0}
+count = {"ptr": 0, "off": 0, "keep": 0, "client": 0, "ret": 0}
 
 
 def fix_function(m):
     name = m.group(1)
-    types = fields.get(name) or fields.get(re.sub(r"^(?:ext|gl)_", "", name))
+    types = fields.get(name) or fields.get(re.sub(r"^(?:ext|gl|wgl)_", "", name))
     if types is None:
         return m.group(0)
     body = m.group(0)
@@ -52,6 +54,9 @@ def fix_function(m):
     def repl(cm):
         field = cm.group(1)
         decl = types.get(field)
+        if decl is not None and re.fullmatch(r"(?:const\s+)?(?:HGLRC|HPBUFFERARB|GLsync)", decl):
+            count["client"] += 1
+            return "wow_to_host(params->%s)" % field
         if decl is None or "*" not in decl:
             count["keep"] += 1
             return cm.group(0)
@@ -61,10 +66,13 @@ def fix_function(m):
         count["ptr"] += 1
         return "wow_to_host(params->%s)" % field
 
-    return conv_re.sub(repl, body)
+    body = conv_re.sub(repl, body)
+    n = body.count("UlongToHandle( params->ret )")
+    count["ret"] += n
+    return body.replace("UlongToHandle( params->ret )", "wow_to_host( params->ret )")
 
 
 new = func_re.sub(fix_function, src)
 open(thunks_path, "w").write(new)
-print("pointer: %d  maybe-offset: %d  left alone: %d" % (count["ptr"], count["off"], count["keep"]))
+print("pointer: %d  maybe-offset: %d  client objects: %d  ret objects: %d  left alone: %d" % (count["ptr"], count["off"], count["client"], count["ret"], count["keep"]))
 sys.exit(0)

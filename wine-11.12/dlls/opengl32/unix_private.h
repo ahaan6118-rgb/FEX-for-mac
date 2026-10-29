@@ -69,7 +69,7 @@ static inline GLsync get_unix_sync( GLsync sync )
 
 static inline void *copy_wow64_ptr32s( UINT_PTR address, ULONG count )
 {
-    ULONG *ptrs = (ULONG *)address;
+    ULONG *ptrs = wow_to_host( (ULONG)address );
     void **tmp;
 
     if (!ptrs || !(tmp = calloc( count, sizeof(*tmp) ))) return NULL;

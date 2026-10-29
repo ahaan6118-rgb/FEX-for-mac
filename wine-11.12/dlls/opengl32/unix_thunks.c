@@ -33638,9 +33638,9 @@ static NTSTATUS wow64_wgl_wglCopyContext( void *args )
         BOOL ret;
     } *params = args;
     TEB *teb = get_teb64( params->teb );
-    const struct opengl_funcs *funcs = get_context_funcs( ULongToPtr(params->hglrcSrc) );
+    const struct opengl_funcs *funcs = get_context_funcs( wow_to_host(params->hglrcSrc) );
     if (!funcs || !funcs->p_wglCopyContext) return STATUS_NOT_IMPLEMENTED;
-    params->ret = wrap_wglCopyContext( teb, ULongToPtr(params->hglrcSrc), ULongToPtr(params->hglrcDst), params->mask );
+    params->ret = wrap_wglCopyContext( teb, wow_to_host(params->hglrcSrc), wow_to_host(params->hglrcDst), params->mask );
     return STATUS_SUCCESS;
 }
 
@@ -33653,9 +33653,9 @@ static NTSTATUS wow64_wgl_wglDeleteContext( void *args )
         BOOL ret;
     } *params = args;
     TEB *teb = get_teb64( params->teb );
-    const struct opengl_funcs *funcs = get_context_funcs( ULongToPtr(params->oldContext) );
+    const struct opengl_funcs *funcs = get_context_funcs( wow_to_host(params->oldContext) );
     if (!funcs || !funcs->p_wglDeleteContext) return STATUS_NOT_IMPLEMENTED;
-    params->ret = wrap_wglDeleteContext( teb, ULongToPtr(params->oldContext) );
+    params->ret = wrap_wglDeleteContext( teb, wow_to_host(params->oldContext) );
     return STATUS_SUCCESS;
 }
 
@@ -33685,7 +33685,7 @@ static NTSTATUS wow64_wgl_wglSetPixelFormat( void *args )
     } *params = args;
     const struct opengl_funcs *funcs = get_dc_funcs( ULongToPtr(params->hdc) );
     if (!funcs || !funcs->p_wglSetPixelFormat) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_wglSetPixelFormat( ULongToPtr(params->hdc), params->ipfd, ULongToPtr(params->ppfd) );
+    params->ret = funcs->p_wglSetPixelFormat( ULongToPtr(params->hdc), params->ipfd, wow_to_host(params->ppfd) );
     return STATUS_SUCCESS;
 }
 
@@ -42418,7 +42418,7 @@ static NTSTATUS wow64_ext_glClientWaitSync( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glClientWaitSync) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_glClientWaitSync( get_unix_sync( ULongToPtr(params->sync) ), params->flags, params->timeout );
+    params->ret = funcs->p_glClientWaitSync( get_unix_sync( wow_to_host(params->sync) ), params->flags, params->timeout );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -45431,7 +45431,7 @@ static NTSTATUS wow64_ext_glCreateSyncFromCLeventARB( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glCreateSyncFromCLeventARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wrap_glCreateSyncFromCLeventARB( teb, wow_to_host(params->context), wow_to_host(params->event), params->flags, UlongToHandle( params->ret ), funcs->p_glCreateSyncFromCLeventARB );
+    params->ret = (UINT_PTR)wrap_glCreateSyncFromCLeventARB( teb, wow_to_host(params->context), wow_to_host(params->event), params->flags, wow_to_host( params->ret ), funcs->p_glCreateSyncFromCLeventARB );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -46285,7 +46285,7 @@ static NTSTATUS wow64_ext_glDeleteSync( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glDeleteSync) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glDeleteSync( get_unix_sync( ULongToPtr(params->sync) ) );
+    funcs->p_glDeleteSync( get_unix_sync( wow_to_host(params->sync) ) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -48251,7 +48251,7 @@ static NTSTATUS wow64_ext_glFenceSync( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glFenceSync) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wrap_glFenceSync( teb, params->condition, params->flags, UlongToHandle( params->ret ), funcs->p_glFenceSync );
+    params->ret = (UINT_PTR)wrap_glFenceSync( teb, params->condition, params->flags, wow_to_host( params->ret ), funcs->p_glFenceSync );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -55078,7 +55078,7 @@ static NTSTATUS wow64_ext_glGetSynciv( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glGetSynciv) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glGetSynciv( get_unix_sync( ULongToPtr(params->sync) ), params->pname, params->count, wow_to_host(params->length), wow_to_host(params->values) );
+    funcs->p_glGetSynciv( get_unix_sync( wow_to_host(params->sync) ), params->pname, params->count, wow_to_host(params->length), wow_to_host(params->values) );
     return STATUS_SUCCESS;
 }
 
@@ -57802,7 +57802,7 @@ static NTSTATUS wow64_ext_glImportSyncEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glImportSyncEXT) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wrap_glImportSyncEXT( teb, params->external_sync_type, (GLintptr)ULongToPtr(params->external_sync), params->flags, UlongToHandle( params->ret ), funcs->p_glImportSyncEXT );
+    params->ret = (UINT_PTR)wrap_glImportSyncEXT( teb, params->external_sync_type, (GLintptr)ULongToPtr(params->external_sync), params->flags, wow_to_host( params->ret ), funcs->p_glImportSyncEXT );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -58664,7 +58664,7 @@ static NTSTATUS wow64_ext_glIsSync( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glIsSync) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_glIsSync( get_unix_sync( ULongToPtr(params->sync) ) );
+    params->ret = funcs->p_glIsSync( get_unix_sync( wow_to_host(params->sync) ) );
     return STATUS_SUCCESS;
 }
 
@@ -85430,7 +85430,7 @@ static NTSTATUS wow64_ext_glWaitSync( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glWaitSync) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glWaitSync( get_unix_sync( ULongToPtr(params->sync) ), params->flags, params->timeout );
+    funcs->p_glWaitSync( get_unix_sync( wow_to_host(params->sync) ), params->flags, params->timeout );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -86563,9 +86563,9 @@ static NTSTATUS wow64_ext_wglBindTexImageARB( void *args )
         int iBuffer;
         BOOL ret;
     } *params = args;
-    const struct opengl_funcs *funcs = get_pbuffer_funcs( ULongToPtr(params->hPbuffer) );
+    const struct opengl_funcs *funcs = get_pbuffer_funcs( wow_to_host(params->hPbuffer) );
     if (!funcs || !funcs->p_wglBindTexImageARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_wglBindTexImageARB( ULongToPtr(params->hPbuffer), params->iBuffer );
+    params->ret = funcs->p_wglBindTexImageARB( wow_to_host(params->hPbuffer), params->iBuffer );
     return STATUS_SUCCESS;
 }
 
@@ -86582,7 +86582,7 @@ static NTSTATUS wow64_ext_wglCreateContextAttribsARB( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = get_dc_funcs( ULongToPtr(params->hDC) );
     if (!funcs || !funcs->p_wglCreateContextAttribsARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wrap_wglCreateContextAttribsARB( teb, ULongToPtr(params->hDC), ULongToPtr(params->hShareContext), wow_to_host(params->attribList), UlongToHandle( params->ret ) );
+    params->ret = (UINT_PTR)wrap_wglCreateContextAttribsARB( teb, ULongToPtr(params->hDC), wow_to_host(params->hShareContext), wow_to_host(params->attribList), wow_to_host( params->ret ) );
     return STATUS_SUCCESS;
 }
 
@@ -86601,7 +86601,7 @@ static NTSTATUS wow64_ext_wglCreatePbufferARB( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = get_dc_funcs( ULongToPtr(params->hDC) );
     if (!funcs || !funcs->p_wglCreatePbufferARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wrap_wglCreatePbufferARB( teb, ULongToPtr(params->hDC), params->iPixelFormat, params->iWidth, params->iHeight, wow_to_host(params->piAttribList), UlongToHandle( params->ret ) );
+    params->ret = (UINT_PTR)wrap_wglCreatePbufferARB( teb, ULongToPtr(params->hDC), params->iPixelFormat, params->iWidth, params->iHeight, wow_to_host(params->piAttribList), wow_to_host( params->ret ) );
     return STATUS_SUCCESS;
 }
 
@@ -86613,9 +86613,9 @@ static NTSTATUS wow64_ext_wglDestroyPbufferARB( void *args )
         PTR32 hPbuffer;
         BOOL ret;
     } *params = args;
-    const struct opengl_funcs *funcs = get_pbuffer_funcs( ULongToPtr(params->hPbuffer) );
+    const struct opengl_funcs *funcs = get_pbuffer_funcs( wow_to_host(params->hPbuffer) );
     if (!funcs || !funcs->p_wglDestroyPbufferARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_wglDestroyPbufferARB( ULongToPtr(params->hPbuffer) );
+    params->ret = funcs->p_wglDestroyPbufferARB( wow_to_host(params->hPbuffer) );
     return STATUS_SUCCESS;
 }
 
@@ -86641,9 +86641,9 @@ static NTSTATUS wow64_ext_wglGetPbufferDCARB( void *args )
         PTR32 hPbuffer;
         PTR32 ret;
     } *params = args;
-    const struct opengl_funcs *funcs = get_pbuffer_funcs( ULongToPtr(params->hPbuffer) );
+    const struct opengl_funcs *funcs = get_pbuffer_funcs( wow_to_host(params->hPbuffer) );
     if (!funcs || !funcs->p_wglGetPbufferDCARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)funcs->p_wglGetPbufferDCARB( ULongToPtr(params->hPbuffer) );
+    params->ret = (UINT_PTR)funcs->p_wglGetPbufferDCARB( wow_to_host(params->hPbuffer) );
     return STATUS_SUCCESS;
 }
 
@@ -86672,7 +86672,7 @@ static NTSTATUS wow64_ext_wglMakeContextCurrentARB( void *args )
         BOOL ret;
     } *params = args;
     TEB *teb = get_teb64( params->teb );
-    params->ret = wrap_wglMakeContextCurrentARB( teb, ULongToPtr(params->hDrawDC), ULongToPtr(params->hReadDC), ULongToPtr(params->hglrc) );
+    params->ret = wrap_wglMakeContextCurrentARB( teb, ULongToPtr(params->hDrawDC), ULongToPtr(params->hReadDC), wow_to_host(params->hglrc) );
     return STATUS_SUCCESS;
 }
 
@@ -86718,9 +86718,9 @@ static NTSTATUS wow64_ext_wglQueryPbufferARB( void *args )
         PTR32 piValue;
         BOOL ret;
     } *params = args;
-    const struct opengl_funcs *funcs = get_pbuffer_funcs( ULongToPtr(params->hPbuffer) );
+    const struct opengl_funcs *funcs = get_pbuffer_funcs( wow_to_host(params->hPbuffer) );
     if (!funcs || !funcs->p_wglQueryPbufferARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_wglQueryPbufferARB( ULongToPtr(params->hPbuffer), params->iAttribute, wow_to_host(params->piValue) );
+    params->ret = funcs->p_wglQueryPbufferARB( wow_to_host(params->hPbuffer), params->iAttribute, wow_to_host(params->piValue) );
     return STATUS_SUCCESS;
 }
 
@@ -86767,9 +86767,9 @@ static NTSTATUS wow64_ext_wglReleasePbufferDCARB( void *args )
         PTR32 hDC;
         int ret;
     } *params = args;
-    const struct opengl_funcs *funcs = get_pbuffer_funcs( ULongToPtr(params->hPbuffer) );
+    const struct opengl_funcs *funcs = get_pbuffer_funcs( wow_to_host(params->hPbuffer) );
     if (!funcs || !funcs->p_wglReleasePbufferDCARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_wglReleasePbufferDCARB( ULongToPtr(params->hPbuffer), ULongToPtr(params->hDC) );
+    params->ret = funcs->p_wglReleasePbufferDCARB( wow_to_host(params->hPbuffer), ULongToPtr(params->hDC) );
     return STATUS_SUCCESS;
 }
 
@@ -86782,9 +86782,9 @@ static NTSTATUS wow64_ext_wglReleaseTexImageARB( void *args )
         int iBuffer;
         BOOL ret;
     } *params = args;
-    const struct opengl_funcs *funcs = get_pbuffer_funcs( ULongToPtr(params->hPbuffer) );
+    const struct opengl_funcs *funcs = get_pbuffer_funcs( wow_to_host(params->hPbuffer) );
     if (!funcs || !funcs->p_wglReleaseTexImageARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_wglReleaseTexImageARB( ULongToPtr(params->hPbuffer), params->iBuffer );
+    params->ret = funcs->p_wglReleaseTexImageARB( wow_to_host(params->hPbuffer), params->iBuffer );
     return STATUS_SUCCESS;
 }
 
@@ -86797,9 +86797,9 @@ static NTSTATUS wow64_ext_wglSetPbufferAttribARB( void *args )
         PTR32 piAttribList;
         BOOL ret;
     } *params = args;
-    const struct opengl_funcs *funcs = get_pbuffer_funcs( ULongToPtr(params->hPbuffer) );
+    const struct opengl_funcs *funcs = get_pbuffer_funcs( wow_to_host(params->hPbuffer) );
     if (!funcs || !funcs->p_wglSetPbufferAttribARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_wglSetPbufferAttribARB( ULongToPtr(params->hPbuffer), wow_to_host(params->piAttribList) );
+    params->ret = funcs->p_wglSetPbufferAttribARB( wow_to_host(params->hPbuffer), wow_to_host(params->piAttribList) );
     return STATUS_SUCCESS;
 }
 
