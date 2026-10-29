@@ -585,7 +585,9 @@ NTSTATUS WINAPI wow64_NtProtectVirtualMemory( UINT *args )
 NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
 {
     HANDLE handle = get_handle( &args );
-    void *addr = get_ptr( &args );
+    ULONG addr32 = get_ulong( &args );
+    ULONG_PTR base = wow_guest_base_for_process( handle );
+    void *addr = base ? (void *)(base + addr32) : (void *)(ULONG_PTR)addr32;
     MEMORY_INFORMATION_CLASS class = get_ulong( &args );
     void *ptr = get_ptr( &args );
     ULONG len = get_ulong( &args );
@@ -599,7 +601,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
     case MemoryBasicInformation:  /* MEMORY_BASIC_INFORMATION */
         if (len < sizeof(MEMORY_BASIC_INFORMATION32))
             status = STATUS_INFO_LENGTH_MISMATCH;
-        else if (addr_above_guest_limit( addr ))
+        else if (addr32 > highest_user_address)
             status = STATUS_INVALID_PARAMETER;
         else
         {
@@ -608,15 +610,15 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
 
             if (!(status = NtQueryVirtualMemory( handle, addr, class, &info, sizeof(info), &res_len )))
             {
-                info32->BaseAddress = host_ptr32( info.BaseAddress );
-                info32->AllocationBase = host_ptr32( info.AllocationBase );
+                info32->BaseAddress = host_ptr32_in( base, info.BaseAddress );
+                info32->AllocationBase = host_ptr32_in( base, info.AllocationBase );
                 info32->AllocationProtect = info.AllocationProtect;
                 info32->RegionSize = info.RegionSize;
                 info32->State = info.State;
                 info32->Protect = info.Protect;
                 info32->Type = info.Type;
-                if (guest_rel( info.BaseAddress ) + info.RegionSize > highest_user_address)
-                    info32->RegionSize = highest_user_address - guest_rel( info.BaseAddress ) + 1;
+                if (((ULONG_PTR)info.BaseAddress - base) + info.RegionSize > highest_user_address)
+                    info32->RegionSize = highest_user_address - ((ULONG_PTR)info.BaseAddress - base) + 1;
             }
         }
         res_len = sizeof(MEMORY_BASIC_INFORMATION32);
@@ -644,7 +646,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
     {
         if (len < sizeof(MEMORY_REGION_INFORMATION32))
             status = STATUS_INFO_LENGTH_MISMATCH;
-        else if (addr_above_guest_limit( addr ))
+        else if (addr32 > highest_user_address)
             status = STATUS_INVALID_PARAMETER;
         else
         {
@@ -653,15 +655,15 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
 
             if (!(status = NtQueryVirtualMemory( handle, addr, class, &info, sizeof(info), &res_len )))
             {
-                info32->AllocationBase = host_ptr32( info.AllocationBase );
+                info32->AllocationBase = host_ptr32_in( base, info.AllocationBase );
                 info32->AllocationProtect = info.AllocationProtect;
                 info32->RegionType = info.RegionType;
                 info32->RegionSize = info.RegionSize;
                 info32->CommitSize = info.CommitSize;
                 info32->PartitionId = info.PartitionId;
                 info32->NodePreference = info.NodePreference;
-                if (guest_rel( info.AllocationBase ) + info.RegionSize > highest_user_address)
-                    info32->RegionSize = highest_user_address - guest_rel( info.AllocationBase ) + 1;
+                if (((ULONG_PTR)info.AllocationBase - base) + info.RegionSize > highest_user_address)
+                    info32->RegionSize = highest_user_address - ((ULONG_PTR)info.AllocationBase - base) + 1;
             }
         }
         res_len = sizeof(MEMORY_REGION_INFORMATION32);
@@ -677,7 +679,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
         if (len < sizeof(*info32)) return STATUS_INFO_LENGTH_MISMATCH;
 
         info = Wow64AllocateTemp( count * sizeof(*info) );
-        for (i = 0; i < count; i++) info[i].VirtualAddress = guest_ptr32( info32[i].VirtualAddress );
+        for (i = 0; i < count; i++) info[i].VirtualAddress = guest_ptr32_in( base, info32[i].VirtualAddress );
         if (!(status = NtQueryVirtualMemory( handle, addr, class, info, count * sizeof(*info), &res_len )))
         {
             count = res_len / sizeof(*info);
@@ -691,7 +693,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
     {
         if (len < sizeof(MEMORY_IMAGE_INFORMATION32)) return STATUS_INFO_LENGTH_MISMATCH;
 
-        if (addr_above_guest_limit( addr )) status = STATUS_INVALID_PARAMETER;
+        if (addr32 > highest_user_address) status = STATUS_INVALID_PARAMETER;
         else
         {
             MEMORY_IMAGE_INFORMATION info;
@@ -699,7 +701,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
 
             if (!(status = NtQueryVirtualMemory( handle, addr, class, &info, sizeof(info), &res_len )))
             {
-                info32->ImageBase   = host_ptr32( info.ImageBase );
+                info32->ImageBase   = host_ptr32_in( base, info.ImageBase );
                 info32->SizeOfImage = info.SizeOfImage;
                 info32->ImageFlags  = info.ImageFlags;
             }
@@ -717,7 +719,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
         break;
     case MemoryWineLoadUnixLibByName:
     {
-        UNICODE_STRING32 *str32 = addr;
+        UNICODE_STRING32 *str32 = guest_ptr32( addr32 );
         UNICODE_STRING str;
 
         status = NtQueryVirtualMemory( handle, unicode_str_32to64( &str, str32 ),
