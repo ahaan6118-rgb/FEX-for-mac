@@ -8,6 +8,7 @@
 #  * oleacc.dll  - Chromium's libcef imports it via UIAutomationCore
 #  * nsiproxy    - registers the NSI proxy driver service. Without it GetExtendedTcpTable() fails,
 #                  and Steam rejects the web UI's websocket as an "unknown source" (owner-PID check).
+#  * TEMP/TMP    - environment variables a hand-made prefix lacks
 #  * vulkan-1    - Steam's Chromium ships its own Vulkan loader and SwiftShader ICD next to
 #                  steamwebhelper.exe; Wine must prefer that loader over its builtin one there.
 #  * FEX_HALFBARRIERTSOENABLED=0 - FEX's half-barrier TSO makes unaligned accesses non-atomic;
@@ -55,6 +56,19 @@ fi
 
 # FEX option, see above
 wine reg add 'HKCU\Environment' /v FEX_HALFBARRIERTSOENABLED /t REG_SZ /d 0 /f >/dev/null 2>&1
+
+# TEMP/TMP: a hand-made prefix has none, so GetTempPath() falls back to C:\windows\ and programs fail to create
+# their temp dirs (GameMaker games: "Failed to create tmp dir")
+WINUSER="$(wine cmd /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r\n ')"
+if [ -n "$WINUSER" ]; then
+    mkdir -p "$WINEPREFIX/drive_c/users/$WINUSER/AppData/Local/Temp"
+    for v in TEMP TMP; do
+        wine reg add 'HKCU\Environment' /v $v /t REG_SZ /d "C:\\users\\$WINUSER\\AppData\\Local\\Temp" /f >/dev/null 2>&1
+    done
+fi
+
+# FEX x87: full 80-bit precision (reduced precision corrupts 64-bit FILD/FISTP copies used by Delphi programs)
+wine reg add 'HKCU\Environment' /v FEX_X87REDUCEDPRECISION /t REG_SZ /d 0 /f >/dev/null 2>&1
 
 # restart the server so the service starts on the next launch
 "$WINE_BIN/wineserver" -k 2>/dev/null || true

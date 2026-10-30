@@ -57,6 +57,9 @@ export PATH="$WINE_DIR/bin:$PATH"
 # FEX's half-barrier TSO makes unaligned accesses non-atomic; Chromium-based programs then deadlock at startup.
 # FEX reads FEX_* options from the environment, and the prefix registry carries the same value for other launchers.
 export FEX_HALFBARRIERTSOENABLED="${FEX_HALFBARRIERTSOENABLED:-0}"
+# x87 in 64-bit precision loses the low bits of FILD/FISTP qword round trips, which Delphi's Move() uses to copy
+# 8 bytes at a time: every Delphi/GameMaker program then corrupts its strings (paths, texts).
+export FEX_X87REDUCEDPRECISION="${FEX_X87REDUCEDPRECISION:-0}"
 
 # --- prefix extras (rsaenh, oleacc, nsiproxy, vulkan-1 override), once per prefix ----------------------------------
 EXTRAS="$RES/scripts/prefix-extras.sh"
