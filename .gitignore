@@ -13,14 +13,14 @@ dxmt/
 dxmt-src/
 
 # App bundle binaries (built from source)
-RosettaKiller.app/Contents/MacOS/RosettaKiller
-RosettaKiller.app/Contents/Frameworks/
-RosettaKiller.app/Contents/Resources/wine/
-RosettaKiller.app/Contents/Resources/mkxp-z/mkxp-z.aarch64
-RosettaKiller.app/Contents/Resources/mkxp-z/mkxp.json
-RosettaKiller.app/Contents/Resources/test_apps/
-RosettaKiller.app/Contents/Resources/hello_direct.exe
-RosettaKiller.app/Contents/_CodeSignature/
+FEXforMac.app/Contents/MacOS/
+FEXforMac.app/Contents/Frameworks/
+FEXforMac.app/Contents/Resources/wine/
+FEXforMac.app/Contents/Resources/mkxp-z/mkxp-z.aarch64
+FEXforMac.app/Contents/Resources/mkxp-z/mkxp.json
+FEXforMac.app/Contents/Resources/test_apps/
+FEXforMac.app/Contents/Resources/hello_direct.exe
+FEXforMac.app/Contents/_CodeSignature/
 
 # macOS
 .DS_Store

@@ -33,6 +33,59 @@ Each component retains its original license.
 - **Usage**: Vulkan → Metal translation (libMoltenVK.dylib)
 - **Copyright**: Copyright (c) 2015-2026 The Brenwill Workshop Ltd.
 
+## FreeType
+
+- **Project**: https://freetype.org/
+- **License**: FreeType License (BSD-style, with attribution) or GPL-2.0 - your choice
+- **Usage**: Font rendering for Wine (libfreetype.6.dylib)
+
+## libpng
+
+- **Project**: http://www.libpng.org/
+- **License**: libpng License (zlib-style)
+- **Usage**: Image decoding for Wine (libpng16.16.dylib)
+
+## GnuTLS and dependencies
+
+Loaded by Wine's schannel/PFX support (libgnutls.30.dylib and friends, from Homebrew builds):
+
+- **GnuTLS** - LGPL-2.1-or-later - https://www.gnutls.org/
+- **Nettle / Hogweed** - LGPL-3.0-or-later or GPL-2.0-or-later - https://www.lysator.liu.se/~nisse/nettle/
+- **GMP** - LGPL-3.0-or-later or GPL-2.0-or-later - https://gmplib.org/
+- **libtasn1** - LGPL-2.1-or-later - https://www.gnu.org/software/libtasn1/
+- **p11-kit** - BSD-3-Clause - https://p11-glue.github.io/p11-glue/p11-kit.html
+- **libidn2** - LGPL-3.0-or-later or GPL-2.0-or-later - https://gitlab.com/libidn/libidn2
+- **libunistring** - LGPL-3.0-or-later or GPL-2.0-or-later - https://www.gnu.org/software/libunistring/
+- **gettext (libintl)** - LGPL-2.1-or-later - https://www.gnu.org/software/gettext/
+
+## Vulkan Loader
+
+- **Project**: https://github.com/KhronosGroup/Vulkan-Loader
+- **License**: Apache License 2.0
+- **Usage**: libvulkan.1.dylib
+
+## willfaust's FEX and Wine forks ("Guest Window")
+
+- **Projects**: https://github.com/willfaust/FEX , https://github.com/willfaust/wine
+- **License**: MIT (FEX) / LGPL-2.1-or-later (Wine)
+- **Usage**: the 32-bit (i386) translation provider and the matching Wine changes
+
+## Wine modifications in this repository
+
+`wine-11.12/` contains only the Wine 11.12 files this project changed (plus
+`wine-11.12/FEX-FOR-MAC-CHANGES.md`, the list of changed files). They are licensed under the
+LGPL-2.1-or-later like the rest of Wine. The complete corresponding source of a binary release is
+Wine 11.12 from https://www.winehq.org/ with these files applied on top.
+
+## Not included
+
+- **Steam** (Valve Corporation) is proprietary and is not distributed with FEX for Mac. Users download
+  the installer from Valve themselves. "Steam" is a trademark of Valve; this project is not
+  affiliated with or endorsed by Valve.
+- **Games** and their data are never included.
+
+---
+
 ## mkxp-z
 
 - **Project**: https://github.com/mkxp-z/mkxp-z
