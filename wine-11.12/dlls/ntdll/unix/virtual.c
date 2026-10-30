@@ -29,6 +29,7 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <time.h>
 #include <string.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -211,6 +212,22 @@ static void *working_set_limit   = (void *)0x7fff0000;
 static void *host_addr_space_limit;  /* top of the host virtual address space */
 
 ULONG_PTR wow_guest_window_base;  /* host address of guest 0 for 32-bit WoW64; 0 = classic identity */
+
+/* TEMP DEBUG (WINE_FREETRACE=1): log guest-window map/alloc/free/unmap events to stderr */
+static void ft_log( const char *op, const void *addr, SIZE_T size, ULONG type )
+{
+    static int enabled = -1;
+    struct timespec ts;
+    ULONG_PTR a = (ULONG_PTR)addr;
+
+    if (enabled < 0) enabled = getenv( "WINE_FREETRACE" ) != NULL;
+    if (!enabled || !wow_guest_window_base) return;
+    if (a < wow_guest_window_base || a >= wow_guest_window_base + ((ULONG_PTR)1 << 32)) return;
+    clock_gettime( CLOCK_MONOTONIC, &ts );
+    fprintf( stderr, "FT %lu.%03lu tid=%04x %s guest=%08lx size=%lx type=%x\n", (unsigned long)ts.tv_sec % 100000,
+             (unsigned long)ts.tv_nsec / 1000000, (unsigned int)((ULONG_PTR)pthread_self() >> 4) & 0xffff, op,
+             (unsigned long)(a - wow_guest_window_base), (unsigned long)size, type );
+}
 
 static struct file_view *arm64ec_view;
 
@@ -5422,6 +5439,7 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
 
     if (status == STATUS_SUCCESS)
     {
+        if (type & MEM_RESERVE) ft_log( "alloc", base, size, type );
         *ret = base;
         *size_ptr = size;
     }
@@ -5644,6 +5662,7 @@ NTSTATUS WINAPI NtFreeVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *si
     SIZE_T size = *size_ptr;
 
     TRACE("%p %p %08lx %x\n", process, addr, size, type );
+    if (process == NtCurrentProcess() && (type & MEM_RELEASE)) ft_log( "free", addr, size, type );
 
     if (process != NtCurrentProcess())
     {
@@ -6721,6 +6740,7 @@ done:
  */
 NTSTATUS WINAPI NtUnmapViewOfSection( HANDLE process, PVOID addr )
 {
+    if (process == NtCurrentProcess()) ft_log( "unmap", addr, 0, 0 );
     return unmap_view_of_section( process, addr, 0 );
 }
 
