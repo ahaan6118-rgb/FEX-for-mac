@@ -10,6 +10,7 @@
 #   * add command line flags the program needs under emulation        (EXTRA_ARGS)
 #   * recover from a later freeze of one helper process                (RECOVER_KILL)
 #   * set extra environment variables, e.g. FEX options              (EXTRA_ENV)
+#   * stay patient while the program is visibly busy (e.g. downloading)  (PROGRESS_LOG)
 #   * follow a program that restarts itself (exit code RESTART_CODE)   (RESTART_CODE)
 #   * quit the program politely so it saves its state                  (QUIT_ARGS)
 #   * start another program afterwards, or instead of this one        (POST_RUN, SKIP_IF_EXISTS)
@@ -84,7 +85,7 @@ esac
 EXE_NAME="$(basename "${PROGRAM//\\//}" | tr '[:upper:]' '[:lower:]')"
 
 # --- profile ---------------------------------------------------------------------------------------------------
-EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; QUIT_ARGS=""; POST_RUN=""; SKIP_IF_EXISTS=""; RESTART_CODE=""
+EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; QUIT_ARGS=""; POST_RUN=""; SKIP_IF_EXISTS=""; RESTART_CODE=""; PROGRESS_LOG=""
 SETTLE=110; TRIES=4; EARLY_EXIT_SECS=60; PROFILE_NAME=""
 if [ "$NO_PROFILE" != 1 ]; then
     for pf in "$RES"/profiles/*.profile; do
@@ -93,11 +94,11 @@ if [ "$NO_PROFILE" != 1 ]; then
         # shellcheck disable=SC1090
         . "$pf"
         if [ "$(echo "$MATCH_EXE" | tr '[:upper:]' '[:lower:]')" = "$EXE_NAME" ]; then PROFILE_NAME="$(basename "$pf" .profile)"; break; fi
-        EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; QUIT_ARGS=""; POST_RUN=""; SKIP_IF_EXISTS=""; RESTART_CODE=""
+        EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; QUIT_ARGS=""; POST_RUN=""; SKIP_IF_EXISTS=""; RESTART_CODE=""; PROGRESS_LOG=""
         SETTLE=110; TRIES=4; EARLY_EXIT_SECS=60
     done
 fi
-[ -n "$PROFILE_NAME" ] || { EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; QUIT_ARGS=""; POST_RUN=""; SKIP_IF_EXISTS=""; RESTART_CODE=""; }
+[ -n "$PROFILE_NAME" ] || { EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; QUIT_ARGS=""; POST_RUN=""; SKIP_IF_EXISTS=""; RESTART_CODE=""; PROGRESS_LOG=""; }
 # per-program environment (e.g. FEX options such as FEX_TSOENABLED=0), "VAR=value VAR2=value" from the profile
 for kv in $EXTRA_ENV; do export "$kv"; done
 # DXMT (d3d11/dxgi -> Metal) by default; a profile can narrow this (Chromium programs start much faster without it)
@@ -127,15 +128,16 @@ graceful_stop() {
     for ((gi = 0; gi < 40; gi++)); do kill -0 "$WPID" 2>/dev/null || return 0; sleep 1; done
     log "$EXE_NAME did not quit in time"
 }
-# the program exited with RESTART_CODE: it restarted itself as a new process; keep supervising that one
-follow_restart() {
-    local i p
-    for ((i = 0; i < 40; i++)); do
-        p=$(/usr/bin/pgrep -n -f "$SINGLE_INSTANCE_PATTERN" 2>/dev/null)
-        if [ -n "$p" ]; then WPID=$p; log "$EXE_NAME restarted itself, now following pid $p"; return 0; fi
-        sleep 1
-    done
-    return 1
+# the program exited with RESTART_CODE (it wants to restart itself): its own relaunch can lose our flags, so stop that
+# copy and start it again ourselves with the profile's flags. Limited, so a program that always asks cannot loop forever.
+RESTARTS=0
+restart_ourselves() {
+    RESTARTS=$((RESTARTS + 1))
+    [ "$RESTARTS" -le 8 ] || return 1
+    log "$EXE_NAME asked to restart (exit $RESTART_CODE), restarting it with our flags ($RESTARTS)"
+    sleep 2
+    "$WINESERVER" -k 2>/dev/null; sleep 3
+    run_once "$@"
 }
 stop_all() { [ -n "$WPID" ] && kill "$WPID" 2>/dev/null; "$WINESERVER" -k 2>/dev/null; }
 # die by the signal itself so callers see an ordinary termination (status 15), not an error
@@ -174,9 +176,14 @@ while [ $try -le "$TRIES" ]; do
     bad=""
     for ((t = 0; t < SETTLE; t += 5)); do
         sleep 5
+        # a program that keeps writing its progress log (Steam downloading its update) is working, not frozen
+        if [ -n "$PROGRESS_LOG" ] && [ -f "$WINEPREFIX/$PROGRESS_LOG" ] \
+           && [ $(( $(date +%s) - $(stat -f %m "$WINEPREFIX/$PROGRESS_LOG") )) -lt 20 ] && [ $((SECONDS - started)) -lt 3600 ]; then
+            t=0
+        fi
         if ! kill -0 "$WPID" 2>/dev/null; then
             wait "$WPID"; rc=$?
-            if [ -n "$RESTART_CODE" ] && [ "$rc" = "$RESTART_CODE" ] && [ -n "$SINGLE_INSTANCE_PATTERN" ] && follow_restart; then continue; fi
+            if [ -n "$RESTART_CODE" ] && [ "$rc" = "$RESTART_CODE" ] && restart_ourselves "$@"; then continue; fi
             if [ $((SECONDS - started)) -ge "$EARLY_EXIT_SECS" ]; then log "exit status $rc"; rm -f "$STAMP"; exit $rc; fi
             bad="exited early (status $rc after $((SECONDS - started))s)"; break
         fi
@@ -222,10 +229,9 @@ if [ -n "$RECOVER_KILL" ] && [ -n "$HANG_PATTERN" ]; then
     done
 fi
 wait "$WPID" 2>/dev/null; rc=$?
-# the program may have restarted itself while we were waiting: follow it until it is really gone
-while [ -n "$RESTART_CODE" ] && [ "$rc" = "$RESTART_CODE" ] && follow_restart; do
-    while kill -0 "$WPID" 2>/dev/null; do sleep 2; done
-    rc=0
+# the program may restart itself later (e.g. after an update): keep it running with our flags
+while [ -n "$RESTART_CODE" ] && [ "$rc" = "$RESTART_CODE" ] && restart_ourselves "$@"; do
+    wait "$WPID" 2>/dev/null; rc=$?
 done
 log "exit status $rc"
 rm -f "$STAMP"

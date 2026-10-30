@@ -34,3 +34,6 @@ QUIT_ARGS="-shutdown"
 
 # Steam exits with 42 when it restarts itself (after an update check or an unclean shutdown); keep following it.
 RESTART_CODE=42
+
+# Steam downloads its client on the first start (minutes, no window): do not mistake that for a freeze.
+PROGRESS_LOG="drive_c/Program Files/Steam/logs/bootstrap_log.txt"
