@@ -128,3 +128,6 @@ echo "aarch64 PEs:    $(ls ${WINE_DIR}/lib/wine/aarch64-windows/*.{dll,exe} 2>/d
 echo "x86_64 PEs:     $(ls ${WINE_DIR}/lib/wine/x86_64-windows/*.{dll,exe} 2>/dev/null | wc -l | tr -d ' ')"
 echo "i386 PEs:       $(ls ${WINE_DIR}/lib/wine/i386-windows/*.{dll,exe} 2>/dev/null | wc -l | tr -d ' ')"
 echo "Fonts:          $(ls ${WINE_DIR}/share/wine/fonts/* 2>/dev/null | wc -l | tr -d ' ')"
+
+# generic program runner (profiles, startup-freeze restart) and prefix fixes
+"${ROOT}/scripts/install-runner.sh" "${APP}"

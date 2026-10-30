@@ -1,0 +1,160 @@
+#!/bin/bash
+# fex-run - run any Windows program through Wine + FEX, with optional per-program profiles.
+#
+#   fex-run [--prefix DIR] [--no-profile] <program.exe | C:\path\program.exe> [program args...]
+#
+# Lives in FEXforMac.app/Contents/Resources/bin. Used by the FEX for Mac GUI for every program, and by
+# launcher apps such as "Steam (FEX).app" (scripts/make-launcher.sh).
+#
+# A profile (Resources/profiles/*.profile, plain shell variables) is picked by the program's file name and can
+#   * add command line flags the program needs under emulation        (EXTRA_ARGS)
+#   * choose its Wine DLL overrides                                    (DLLOVERRIDES)
+#   * refuse a second copy while one is already running                (SINGLE_INSTANCE_PATTERN)
+#   * restart the program when it freezes or dies early                (WATCH_LOG, HANG_PATTERN, ...)
+# so nothing here is specific to one program. See profiles/steam.profile for an example.
+#
+# Environment: FEX_PREFIX / WINEPREFIX (prefix dir, default ~/.fex-for-mac), FEX_RUN_LOG (log file),
+#              FEX_DLLOVERRIDES (overrides the profile's / default Wine DLL overrides),
+#              FEX_NO_PROFILE=1 (same as --no-profile), FEX_WINEDEBUG (default -all).
+
+PREFIX_ARG=""
+NO_PROFILE="${FEX_NO_PROFILE:-0}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --prefix) PREFIX_ARG="$2"; shift 2 ;;
+        --no-profile) NO_PROFILE=1; shift ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+[ $# -ge 1 ] || { echo "usage: fex-run [--prefix DIR] [--no-profile] <program.exe> [args...]" >&2; exit 2; }
+PROGRAM="$1"; shift
+
+SELF="$(cd "$(dirname "$0")" && pwd)"
+RES="$(cd "$SELF/.." && pwd)"
+CONTENTS="$(cd "$RES/.." && pwd)"
+WINE_DIR="$RES/wine"
+export WINEPREFIX="${PREFIX_ARG:-${FEX_PREFIX:-${WINEPREFIX:-$HOME/.fex-for-mac}}}"
+LOG="${FEX_RUN_LOG:-$HOME/Library/Logs/FEXforMac.log}"
+mkdir -p "$(dirname "$LOG")"
+
+log() { echo "$(date '+%F %T') fex-run: $*" >>"$LOG"; }
+note() { /usr/bin/osascript -e "display notification \"$1\" with title \"FEX for Mac\"" >/dev/null 2>&1; }
+
+[ -x "$WINE_DIR/bin/wine" ] || { echo "fex-run: no Wine in $WINE_DIR" >&2; exit 1; }
+
+# --- environment (kept identical to the GUI's makeWineEnv) ------------------------------------------------
+export WINESERVER="$WINE_DIR/bin/wineserver"
+export WINELOADERNOEXEC=1
+export WINEDEBUG="${FEX_WINEDEBUG:--all}"
+export DYLD_LIBRARY_PATH="$WINE_DIR/lib:$CONTENTS/Frameworks"
+export DYLD_FALLBACK_LIBRARY_PATH="$CONTENTS/Frameworks:$WINE_DIR/lib:/usr/lib"
+export VK_ICD_FILENAMES="$RES/vulkan/icd.d/MoltenVK_icd.json"
+export VK_DRIVER_FILES="$RES/vulkan/icd.d/MoltenVK_icd.json"
+export MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=1
+export PATH="$WINE_DIR/bin:$PATH"
+# FEX's half-barrier TSO makes unaligned accesses non-atomic; Chromium-based programs then deadlock at startup.
+# FEX reads FEX_* options from the environment, and the prefix registry carries the same value for other launchers.
+export FEX_HALFBARRIERTSOENABLED="${FEX_HALFBARRIERTSOENABLED:-0}"
+
+# --- prefix extras (rsaenh, oleacc, nsiproxy, vulkan-1 override), once per prefix ----------------------------------
+EXTRAS="$RES/scripts/prefix-extras.sh"
+MARK="$WINEPREFIX/.fexformac-extras-1"
+if [ -f "$WINEPREFIX/system.reg" ] && [ ! -f "$MARK" ] && [ -f "$EXTRAS" ]; then
+    log "applying prefix extras to $WINEPREFIX"
+    FEX_APP="$CONTENTS/.." bash "$EXTRAS" "$WINEPREFIX" >>"$LOG" 2>&1 && touch "$MARK"
+fi
+
+# --- program path: unix path inside the prefix's C: drive -> C:\ path ----------------------------------------
+TARGET="$PROGRAM"
+case "$PROGRAM" in
+    "$WINEPREFIX"/drive_c/*) rel="${PROGRAM#"$WINEPREFIX"/drive_c/}"; TARGET="C:\\${rel//\//\\}" ;;
+esac
+EXE_NAME="$(basename "${PROGRAM//\\//}" | tr '[:upper:]' '[:lower:]')"
+
+# --- profile ---------------------------------------------------------------------------------------------------
+EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""
+SETTLE=110; TRIES=4; EARLY_EXIT_SECS=60; PROFILE_NAME=""
+if [ "$NO_PROFILE" != 1 ]; then
+    for pf in "$RES"/profiles/*.profile; do
+        [ -f "$pf" ] || continue
+        MATCH_EXE=""
+        # shellcheck disable=SC1090
+        . "$pf"
+        if [ "$(echo "$MATCH_EXE" | tr '[:upper:]' '[:lower:]')" = "$EXE_NAME" ]; then PROFILE_NAME="$(basename "$pf" .profile)"; break; fi
+        EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""
+        SETTLE=110; TRIES=4; EARLY_EXIT_SECS=60
+    done
+fi
+[ -n "$PROFILE_NAME" ] || { EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; DLLOVERRIDES=""; }
+# DXMT (d3d11/dxgi -> Metal) by default; a profile can narrow this (Chromium programs start much faster without it)
+export WINEDLLOVERRIDES="${FEX_DLLOVERRIDES:-${DLLOVERRIDES:-${WINEDLLOVERRIDES:-d3d11,dxgi=b;winemetal=b}}}"
+[ -n "$PROFILE_NAME" ] && log "profile '$PROFILE_NAME' for $EXE_NAME"
+
+if [ -n "$SINGLE_INSTANCE_PATTERN" ] && /usr/bin/pgrep -f "$SINGLE_INSTANCE_PATTERN" >/dev/null 2>&1; then
+    log "$EXE_NAME is already running"
+    note "$EXE_NAME is already running."
+    exit 0
+fi
+
+WPID=""
+stop_all() { [ -n "$WPID" ] && kill "$WPID" 2>/dev/null; "$WINESERVER" -k 2>/dev/null; }
+# die by the signal itself so callers see an ordinary termination (status 15), not an error
+trap 'log "stopped"; stop_all; trap - TERM; kill -s TERM $$' TERM INT HUP
+
+# shellcheck disable=SC2086
+run_once() { "$WINE_DIR/bin/wine" "$TARGET" $EXTRA_ARGS "$@" & WPID=$!; }
+
+# no watchdog: plain run, pass the exit status through
+if [ -z "$WATCH_LOG" ]; then
+    log "run: $TARGET $EXTRA_ARGS $*"
+    run_once "$@"
+    wait "$WPID"; rc=$?
+    log "exit status $rc"
+    exit $rc
+fi
+
+# watchdog: the program must stay up for SETTLE seconds without HANG_PATTERN appearing in WATCH_LOG
+WATCH_PATH="$WINEPREFIX/$WATCH_LOG"
+STAMP="$(mktemp -t fexrun)"
+try=1; healthy=0
+while [ $try -le "$TRIES" ]; do
+    log "attempt $try/$TRIES: $TARGET $EXTRA_ARGS $*"
+    touch "$STAMP"; started=$SECONDS
+    run_once "$@"
+
+    bad=""
+    for ((t = 0; t < SETTLE; t += 5)); do
+        sleep 5
+        if ! kill -0 "$WPID" 2>/dev/null; then
+            wait "$WPID"; rc=$?
+            if [ $((SECONDS - started)) -ge "$EARLY_EXIT_SECS" ]; then log "exit status $rc"; rm -f "$STAMP"; exit $rc; fi
+            bad="exited early (status $rc after $((SECONDS - started))s)"; break
+        fi
+        if [ -f "$WATCH_PATH" ] && [ "$WATCH_PATH" -nt "$STAMP" ] && [ -n "$HANG_PATTERN" ] && grep -aq "$HANG_PATTERN" "$WATCH_PATH" 2>/dev/null; then
+            bad="hung ('$HANG_PATTERN' in log)"; break
+        fi
+    done
+    if [ -z "$bad" ] && [ -n "$OK_PATTERN" ]; then
+        if ! { [ -f "$WATCH_PATH" ] && [ "$WATCH_PATH" -nt "$STAMP" ] && grep -aq "$OK_PATTERN" "$WATCH_PATH" 2>/dev/null; }; then
+            bad="never reached '$OK_PATTERN'"
+        fi
+    fi
+    [ -z "$bad" ] && { healthy=1; log "healthy after $((SECONDS - started))s"; break; }
+
+    log "attempt $try failed: $bad"
+    try=$((try + 1))
+    [ $try -le "$TRIES" ] && note "$EXE_NAME $bad - restarting (attempt $try of $TRIES)"
+    stop_all; wait "$WPID" 2>/dev/null; sleep 3
+done
+
+if [ $healthy != 1 ]; then
+    log "gave up after $TRIES attempts"
+    note "$EXE_NAME kept failing at startup. Quit and try again."
+    rm -f "$STAMP"; exit 1
+fi
+
+wait "$WPID"; rc=$?
+log "exit status $rc"
+rm -f "$STAMP"
+exit $rc
