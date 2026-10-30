@@ -2014,6 +2014,9 @@ static BOOL fontconfig_enum_family_fallbacks( UINT pitch_and_family, int index,
     char *str;
     DWORD len;
 
+    /* the library name is always compiled in; without the library the pFc* pointers are NULL (macOS has none) */
+    if (!fontconfig_enabled) return FALSE;
+
     if ((pitch_and_family & FIXED_PITCH) || (pitch_and_family & 0xf0) == FF_MODERN) pat = create_family_pattern( "monospace", &pattern_fixed );
     else if ((pitch_and_family & 0xf0) == FF_ROMAN) pat = create_family_pattern( "serif", &pattern_serif );
     else pat = create_family_pattern( "sans", &pattern_sans );
