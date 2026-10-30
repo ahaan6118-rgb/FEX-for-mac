@@ -27,6 +27,15 @@ SCOPE - what this license covers
   Steam is Valve's proprietary software. It is NOT included here and is not covered by anything in
   this repository; you download it yourself from Valve and you need your own Steam account.
 
+CREDIT
+  If you share this software or a modified version of it, you must keep the Required Notice line
+  below, and the license text, with it. Please also credit "FEX for Mac by Ahaan Kalia".
+
+NO WARRANTY, NO LIABILITY (plain-language summary of the legal text below)
+  This software is experimental beta software provided "AS IS", without any warranty. The author
+  is not responsible for any malfunction, data loss, crash, damage to your computer or files, or
+  any other harm resulting from using it. You use it entirely at your own risk.
+
 HISTORY
   Version 0.3.0, the first public release, was published under the MIT License (see
   LICENSE-MIT-v0.3.0.txt). That release stays available under MIT. This license applies to the
