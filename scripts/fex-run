@@ -69,6 +69,9 @@ if [ -f "$WINEPREFIX/system.reg" ] && [ ! -f "$MARK" ] && [ -f "$EXTRAS" ]; then
     FEX_APP="$CONTENTS/.." bash "$EXTRAS" "$WINEPREFIX" >>"$LOG" 2>&1 && touch "$MARK"
 fi
 
+# Windows programs expect to start in their own folder (games look for "data" next to the exe)
+if [ -f "$PROGRAM" ]; then cd "$(dirname "$PROGRAM")" 2>/dev/null; fi
+
 # --- program path: unix path inside the prefix's C: drive -> C:\ path ----------------------------------------
 TARGET="$PROGRAM"
 case "$PROGRAM" in

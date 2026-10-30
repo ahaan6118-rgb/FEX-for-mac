@@ -35,6 +35,17 @@ echo "prefix: $WINEPREFIX"
 wine regsvr32 /s rsaenh.dll >/dev/null 2>&1 || true
 wine C:\\windows\\syswow64\\regsvr32.exe /s rsaenh.dll >/dev/null 2>&1 || true
 
+# 32-bit COM registrations a hand-made prefix lacks (e.g. WebBrowser control: Delphi/VCL programs create it)
+for d in ieframe shdocvw mshtml; do
+    wine C:\\windows\\syswow64\\regsvr32.exe /s $d.dll >/dev/null 2>&1 || true
+done
+
+# 32-bit audio/input COM registrations (DirectSound, MMDevice, DirectInput); audio itself works through
+# winecoreaudio.drv now that its WoW64 thunks translate guest pointers
+for d in mmdevapi dsound dinput dinput8 devenum; do
+    wine C:\\windows\\syswow64\\regsvr32.exe /s $d.dll >/dev/null 2>&1 || true
+done
+
 # nsiproxy driver service (same values wine.inf uses)
 K='HKLM\System\CurrentControlSet\Services\nsiproxy'
 add() { wine reg add "$K" "$@" /f >/dev/null 2>&1; }
