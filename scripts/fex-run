@@ -10,7 +10,7 @@
 #   * add command line flags the program needs under emulation        (EXTRA_ARGS)
 #   * choose its Wine DLL overrides                                    (DLLOVERRIDES)
 #   * refuse a second copy while one is already running                (SINGLE_INSTANCE_PATTERN)
-#   * restart the program when it freezes or dies early                (WATCH_LOG, HANG_PATTERN, ...)
+#   * restart the program when it freezes or dies early                (WATCH_LOG, HANG_PATTERN, OK_LOG, OK_PATTERN)
 # so nothing here is specific to one program. See profiles/steam.profile for an example.
 #
 # Environment: FEX_PREFIX / WINEPREFIX (prefix dir, default ~/.fex-for-mac), FEX_RUN_LOG (log file),
@@ -73,7 +73,7 @@ esac
 EXE_NAME="$(basename "${PROGRAM//\\//}" | tr '[:upper:]' '[:lower:]')"
 
 # --- profile ---------------------------------------------------------------------------------------------------
-EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""
+EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""
 SETTLE=110; TRIES=4; EARLY_EXIT_SECS=60; PROFILE_NAME=""
 if [ "$NO_PROFILE" != 1 ]; then
     for pf in "$RES"/profiles/*.profile; do
@@ -82,11 +82,11 @@ if [ "$NO_PROFILE" != 1 ]; then
         # shellcheck disable=SC1090
         . "$pf"
         if [ "$(echo "$MATCH_EXE" | tr '[:upper:]' '[:lower:]')" = "$EXE_NAME" ]; then PROFILE_NAME="$(basename "$pf" .profile)"; break; fi
-        EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""
+        EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""
         SETTLE=110; TRIES=4; EARLY_EXIT_SECS=60
     done
 fi
-[ -n "$PROFILE_NAME" ] || { EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; DLLOVERRIDES=""; }
+[ -n "$PROFILE_NAME" ] || { EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; DLLOVERRIDES=""; }
 # DXMT (d3d11/dxgi -> Metal) by default; a profile can narrow this (Chromium programs start much faster without it)
 export WINEDLLOVERRIDES="${FEX_DLLOVERRIDES:-${DLLOVERRIDES:-${WINEDLLOVERRIDES:-d3d11,dxgi=b;winemetal=b}}}"
 [ -n "$PROFILE_NAME" ] && log "profile '$PROFILE_NAME' for $EXE_NAME"
@@ -116,11 +116,14 @@ fi
 
 # watchdog: the program must stay up for SETTLE seconds without HANG_PATTERN appearing in WATCH_LOG
 WATCH_PATH="$WINEPREFIX/$WATCH_LOG"
+OK_PATH="$WINEPREFIX/${OK_LOG:-$WATCH_LOG}"
 STAMP="$(mktemp -t fexrun)"
 try=1; healthy=0
 while [ $try -le "$TRIES" ]; do
     log "attempt $try/$TRIES: $TARGET $EXTRA_ARGS $*"
     touch "$STAMP"; started=$SECONDS
+    # logs may be appended to across runs: only look at what this attempt wrote
+    ok_base=0; [ -f "$OK_PATH" ] && ok_base=$(wc -c < "$OK_PATH" | tr -d ' ')
     run_once "$@"
 
     bad=""
@@ -136,7 +139,9 @@ while [ $try -le "$TRIES" ]; do
         fi
     done
     if [ -z "$bad" ] && [ -n "$OK_PATTERN" ]; then
-        if ! { [ -f "$WATCH_PATH" ] && [ "$WATCH_PATH" -nt "$STAMP" ] && grep -aq "$OK_PATTERN" "$WATCH_PATH" 2>/dev/null; }; then
+        ok_size=0; [ -f "$OK_PATH" ] && ok_size=$(wc -c < "$OK_PATH" | tr -d ' ')
+        [ "$ok_size" -lt "$ok_base" ] && ok_base=0     # file was rotated
+        if ! { [ -f "$OK_PATH" ] && tail -c +$((ok_base + 1)) "$OK_PATH" 2>/dev/null | grep -aq "$OK_PATTERN"; }; then
             bad="never reached '$OK_PATTERN'"
         fi
     fi

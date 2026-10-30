@@ -14,7 +14,10 @@ SINGLE_INSTANCE_PATTERN="steam.exe -cef-force-32bit"
 # counts as a startup crash.
 WATCH_LOG="drive_c/Program Files/Steam/logs/cef_log.txt"
 HANG_PATTERN="commit hung"
-OK_PATTERN="process: renderer"
+# healthy = some Steam window was actually shown ("WasHidden 0" in the client log; a login window that is created
+# but never shown is another form of the same freeze)
+OK_LOG="drive_c/Program Files/Steam/logs/webhelper.txt"
+OK_PATTERN="WasHidden 0"
 SETTLE=110
 TRIES=4
 EARLY_EXIT_SECS=60
