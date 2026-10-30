@@ -10,6 +10,8 @@
 #   * add command line flags the program needs under emulation        (EXTRA_ARGS)
 #   * recover from a later freeze of one helper process                (RECOVER_KILL)
 #   * set extra environment variables, e.g. FEX options              (EXTRA_ENV)
+#   * quit the program politely so it saves its state                  (QUIT_ARGS)
+#   * start another program afterwards, or instead of this one        (POST_RUN, SKIP_IF_EXISTS)
 #   * choose its Wine DLL overrides                                    (DLLOVERRIDES)
 #   * refuse a second copy while one is already running                (SINGLE_INSTANCE_PATTERN)
 #   * restart the program when it freezes or dies early                (WATCH_LOG, HANG_PATTERN, OK_LOG, OK_PATTERN)
@@ -81,7 +83,7 @@ esac
 EXE_NAME="$(basename "${PROGRAM//\\//}" | tr '[:upper:]' '[:lower:]')"
 
 # --- profile ---------------------------------------------------------------------------------------------------
-EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""
+EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; QUIT_ARGS=""; POST_RUN=""; SKIP_IF_EXISTS=""
 SETTLE=110; TRIES=4; EARLY_EXIT_SECS=60; PROFILE_NAME=""
 if [ "$NO_PROFILE" != 1 ]; then
     for pf in "$RES"/profiles/*.profile; do
@@ -90,11 +92,11 @@ if [ "$NO_PROFILE" != 1 ]; then
         # shellcheck disable=SC1090
         . "$pf"
         if [ "$(echo "$MATCH_EXE" | tr '[:upper:]' '[:lower:]')" = "$EXE_NAME" ]; then PROFILE_NAME="$(basename "$pf" .profile)"; break; fi
-        EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""
+        EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; QUIT_ARGS=""; POST_RUN=""; SKIP_IF_EXISTS=""
         SETTLE=110; TRIES=4; EARLY_EXIT_SECS=60
     done
 fi
-[ -n "$PROFILE_NAME" ] || { EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; }
+[ -n "$PROFILE_NAME" ] || { EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; QUIT_ARGS=""; POST_RUN=""; SKIP_IF_EXISTS=""; }
 # per-program environment (e.g. FEX options such as FEX_TSOENABLED=0), "VAR=value VAR2=value" from the profile
 for kv in $EXTRA_ENV; do export "$kv"; done
 # DXMT (d3d11/dxgi -> Metal) by default; a profile can narrow this (Chromium programs start much faster without it)
@@ -107,10 +109,26 @@ if [ -n "$SINGLE_INSTANCE_PATTERN" ] && /usr/bin/pgrep -f "$SINGLE_INSTANCE_PATT
     exit 0
 fi
 
+# e.g. an installer whose product is already installed: run the installed program instead
+if [ -n "$SKIP_IF_EXISTS" ] && [ -n "$POST_RUN" ] && [ -f "$WINEPREFIX/$SKIP_IF_EXISTS" ]; then
+    log "$SKIP_IF_EXISTS is already installed - starting it instead of $EXE_NAME"
+    exec "$SELF/fex-run" "$WINEPREFIX/$POST_RUN" "$@"
+fi
+
 WPID=""
+# ask the program to quit by itself first (Steam saves its login on a clean exit), then force it
+graceful_stop() {
+    [ -n "$QUIT_ARGS" ] || return 0
+    [ -n "$WPID" ] && kill -0 "$WPID" 2>/dev/null || return 0
+    log "asking $EXE_NAME to quit ($QUIT_ARGS)"
+    # shellcheck disable=SC2086
+    ( "$WINE_DIR/bin/wine" "$TARGET" $QUIT_ARGS >/dev/null 2>&1 & )
+    for ((gi = 0; gi < 40; gi++)); do kill -0 "$WPID" 2>/dev/null || return 0; sleep 1; done
+    log "$EXE_NAME did not quit in time"
+}
 stop_all() { [ -n "$WPID" ] && kill "$WPID" 2>/dev/null; "$WINESERVER" -k 2>/dev/null; }
 # die by the signal itself so callers see an ordinary termination (status 15), not an error
-trap 'log "stopped"; stop_all; trap - TERM; kill -s TERM $$' TERM INT HUP
+trap 'log "stopped"; graceful_stop; stop_all; trap - TERM; kill -s TERM $$' TERM INT HUP
 
 # shellcheck disable=SC2086
 run_once() { "$WINE_DIR/bin/wine" "$TARGET" $EXTRA_ARGS "$@" & WPID=$!; }
@@ -121,6 +139,12 @@ if [ -z "$WATCH_LOG" ]; then
     run_once "$@"
     wait "$WPID"; rc=$?
     log "exit status $rc"
+    if [ -n "$POST_RUN" ] && [ -f "$WINEPREFIX/$POST_RUN" ]; then
+        # e.g. Steam's installer starts Steam without our settings: stop that one and start it properly
+        log "starting $POST_RUN with its own profile"
+        "$WINESERVER" -k 2>/dev/null; sleep 3
+        exec "$SELF/fex-run" "$WINEPREFIX/$POST_RUN"
+    fi
     exit $rc
 fi
 

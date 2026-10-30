@@ -28,3 +28,6 @@ DLLOVERRIDES="winemetal=b"
 # After startup, a new browser renderer can freeze too (same "commit hung" log line). Killing the newest renderer
 # makes Steam respawn it and the UI comes back.
 RECOVER_KILL="steamwebhelper.exe.*--type=renderer"
+
+# Closing the app (or Stop) first asks Steam to exit by itself so it can save your login and settings.
+QUIT_ARGS="-shutdown"
