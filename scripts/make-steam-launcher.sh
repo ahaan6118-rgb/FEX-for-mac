@@ -35,36 +35,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-cat > "$APP/Contents/MacOS/SteamFEX" <<LAUNCHER
-#!/bin/bash
-# Launches the Windows Steam client through Wine + FEX. Stays alive while Steam runs so the Dock shows it;
-# quitting this app from the Dock stops Steam and the Wine server for this prefix.
-ENGINE="\${FEX_APP:-$ENGINE}"
-export WINEPREFIX="\${WINEPREFIX:-\$HOME/.fex-for-mac}"
-export WINEDEBUG=-all
-# FEX's half-barrier TSO makes Chromium freeze at startup (also set in the prefix by scripts/prefix-extras.sh)
-export FEX_HALFBARRIERTSOENABLED=0
-LOG="\$HOME/Library/Logs/SteamFEX.log"
-WINE="\$ENGINE/Contents/Resources/wine/bin/wine"
-SERVER="\$ENGINE/Contents/Resources/wine/bin/wineserver"
-
-note() { /usr/bin/osascript -e "display notification \"\$1\" with title \"Steam (FEX)\"" >/dev/null 2>&1; }
-
-[ -x "\$WINE" ] || { note "Wine engine not found at \$ENGINE"; exit 1; }
-[ -f "\$WINEPREFIX/drive_c/Program Files/Steam/steam.exe" ] || { note "Steam is not installed in \$WINEPREFIX"; exit 1; }
-
-# already running in this prefix? then there is nothing to do
-if /usr/bin/pgrep -f "steam.exe -cef-force-32bit" >/dev/null 2>&1; then
-    note "Steam is already running."
-    exit 0
-fi
-
-mkdir -p "\$HOME/Library/Logs"
-"\$WINE" "C:\\\\Program Files\\\\Steam\\\\steam.exe" -cef-force-32bit -no-cef-sandbox -cef-disable-gpu -cef-in-process-gpu >>"\$LOG" 2>&1 &
-WPID=\$!
-trap '"\$SERVER" -k 2>/dev/null; kill \$WPID 2>/dev/null; exit 0' TERM INT HUP
-wait \$WPID
-LAUNCHER
+sed "s#@ENGINE@#$ENGINE#" "$ROOT/scripts/SteamFEX.sh.in" > "$APP/Contents/MacOS/SteamFEX"
 chmod +x "$APP/Contents/MacOS/SteamFEX"
 
 codesign --force -s - "$APP" 2>&1 | tail -1

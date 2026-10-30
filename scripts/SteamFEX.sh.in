@@ -1,0 +1,69 @@
+#!/bin/bash
+# Launches the Windows Steam client through Wine + FEX (template for "Steam (FEX).app", see make-steam-launcher.sh).
+# Stays alive while Steam runs so the Dock shows it; quitting this app from the Dock stops Steam and the Wine
+# server of this prefix.
+#
+# Steam's embedded Chromium sometimes freezes at startup (a race in the x86 emulation that is not fixed yet).
+# The freeze is visible in Steam's cef_log as "commit hung", or as a missing renderer process. When that
+# happens this launcher restarts Steam, up to MAX_TRIES times.
+ENGINE="${FEX_APP:-@ENGINE@}"
+export WINEPREFIX="${WINEPREFIX:-$HOME/.fex-for-mac}"
+export WINEDEBUG=-all
+# FEX's half-barrier TSO makes Chromium freeze at startup far more often (also set in the prefix by prefix-extras.sh)
+export FEX_HALFBARRIERTSOENABLED=0
+LOG="$HOME/Library/Logs/SteamFEX.log"
+WINE="$ENGINE/Contents/Resources/wine/bin/wine"
+SERVER="$ENGINE/Contents/Resources/wine/bin/wineserver"
+CEFLOG="$WINEPREFIX/drive_c/Program Files/Steam/logs/cef_log.txt"
+MAX_TRIES=4
+SETTLE=110   # seconds a launch has to run without freezing before it counts as healthy
+
+note() { /usr/bin/osascript -e "display notification \"$1\" with title \"Steam (FEX)\"" >/dev/null 2>&1; }
+
+[ -x "$WINE" ] || { note "Wine engine not found at $ENGINE"; exit 1; }
+[ -f "$WINEPREFIX/drive_c/Program Files/Steam/steam.exe" ] || { note "Steam is not installed in $WINEPREFIX"; exit 1; }
+
+# already running in this prefix? then there is nothing to do
+if /usr/bin/pgrep -f "steam.exe -cef-force-32bit" >/dev/null 2>&1; then
+    note "Steam is already running."
+    exit 0
+fi
+
+mkdir -p "$HOME/Library/Logs"
+STAMP="$(mktemp -t steamfex)"
+WPID=
+stop_all() { [ -n "$WPID" ] && kill "$WPID" 2>/dev/null; "$SERVER" -k 2>/dev/null; }
+trap 'stop_all; rm -f "$STAMP"; exit 0' TERM INT HUP
+
+try=1
+while [ $try -le $MAX_TRIES ]; do
+    touch "$STAMP"
+    "$WINE" "C:\\Program Files\\Steam\\steam.exe" -cef-force-32bit -no-cef-sandbox -cef-disable-gpu -cef-in-process-gpu >>"$LOG" 2>&1 &
+    WPID=$!
+
+    healthy=0
+    for ((t = 0; t < SETTLE; t += 5)); do
+        sleep 5
+        kill -0 "$WPID" 2>/dev/null || { rm -f "$STAMP"; exit 0; }       # Steam quit by itself
+        if [ "$CEFLOG" -nt "$STAMP" ] && grep -aq "commit hung" "$CEFLOG" 2>/dev/null; then break; fi
+    done
+    if [ "$CEFLOG" -nt "$STAMP" ] && ! grep -aq "commit hung" "$CEFLOG" 2>/dev/null \
+       && grep -aq "process: renderer" "$CEFLOG" 2>/dev/null; then
+        healthy=1
+    fi
+    [ $healthy = 1 ] && break
+
+    try=$((try + 1))
+    [ $try -le $MAX_TRIES ] && note "Steam's UI froze at startup, restarting (attempt $try of $MAX_TRIES)"
+    stop_all
+    wait "$WPID" 2>/dev/null
+    sleep 3
+done
+
+if [ $healthy != 1 ]; then
+    note "Steam kept freezing at startup. Quit and try again."
+    echo "$(date): gave up after $MAX_TRIES tries" >>"$LOG"
+fi
+
+wait "$WPID" 2>/dev/null
+rm -f "$STAMP"
