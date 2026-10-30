@@ -24,3 +24,7 @@ EARLY_EXIT_SECS=60
 
 # No DXMT d3d11/dxgi override: Chromium probes Direct3D at startup and that probe makes Steam start ~2x slower.
 DLLOVERRIDES="winemetal=b"
+
+# After startup, a new browser renderer can freeze too (same "commit hung" log line). Killing the newest renderer
+# makes Steam respawn it and the UI comes back.
+RECOVER_KILL="steamwebhelper.exe.*--type=renderer"
