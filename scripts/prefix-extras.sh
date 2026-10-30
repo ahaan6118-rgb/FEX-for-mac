@@ -10,6 +10,9 @@
 #                  and Steam rejects the web UI's websocket as an "unknown source" (owner-PID check).
 #  * vulkan-1    - Steam's Chromium ships its own Vulkan loader and SwiftShader ICD next to
 #                  steamwebhelper.exe; Wine must prefer that loader over its builtin one there.
+#  * FEX_HALFBARRIERTSOENABLED=0 - FEX's half-barrier TSO makes unaligned accesses non-atomic;
+#                  Chromium (steamwebhelper) then freezes at startup in most launches. FEX reads
+#                  FEX_* options from the process environment, so set it in HKCU\Environment.
 set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -49,6 +52,9 @@ CEF="$WINEPREFIX/drive_c/Program Files/Steam/bin/cef/cef.win7"
 if [ -f "$CEF/vk_swiftshader.dll" ]; then
     printf '{"file_format_version":"1.0.0","ICD":{"library_path":".\\\\vk_swiftshader.dll","api_version":"1.3.0"}}' > "$CEF/vk_swiftshader_icd.json"
 fi
+
+# FEX option, see above
+wine reg add 'HKCU\Environment' /v FEX_HALFBARRIERTSOENABLED /t REG_SZ /d 0 /f >/dev/null 2>&1
 
 # restart the server so the service starts on the next launch
 "$WINE_BIN/wineserver" -k 2>/dev/null || true
