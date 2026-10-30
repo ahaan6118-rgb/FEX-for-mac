@@ -31,3 +31,6 @@ RECOVER_KILL="steamwebhelper.exe.*--type=renderer"
 
 # Closing the app (or Stop) first asks Steam to exit by itself so it can save your login and settings.
 QUIT_ARGS="-shutdown"
+
+# Steam exits with 42 when it restarts itself (after an update check or an unclean shutdown); keep following it.
+RESTART_CODE=42
