@@ -9,6 +9,7 @@
 # A profile (Resources/profiles/*.profile, plain shell variables) is picked by the program's file name and can
 #   * add command line flags the program needs under emulation        (EXTRA_ARGS)
 #   * recover from a later freeze of one helper process                (RECOVER_KILL)
+#   * set extra environment variables, e.g. FEX options              (EXTRA_ENV)
 #   * choose its Wine DLL overrides                                    (DLLOVERRIDES)
 #   * refuse a second copy while one is already running                (SINGLE_INSTANCE_PATTERN)
 #   * restart the program when it freezes or dies early                (WATCH_LOG, HANG_PATTERN, OK_LOG, OK_PATTERN)
@@ -80,7 +81,7 @@ esac
 EXE_NAME="$(basename "${PROGRAM//\\//}" | tr '[:upper:]' '[:lower:]')"
 
 # --- profile ---------------------------------------------------------------------------------------------------
-EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""
+EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""
 SETTLE=110; TRIES=4; EARLY_EXIT_SECS=60; PROFILE_NAME=""
 if [ "$NO_PROFILE" != 1 ]; then
     for pf in "$RES"/profiles/*.profile; do
@@ -89,11 +90,13 @@ if [ "$NO_PROFILE" != 1 ]; then
         # shellcheck disable=SC1090
         . "$pf"
         if [ "$(echo "$MATCH_EXE" | tr '[:upper:]' '[:lower:]')" = "$EXE_NAME" ]; then PROFILE_NAME="$(basename "$pf" .profile)"; break; fi
-        EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""
+        EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; HANG_PATTERN=""; OK_PATTERN=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""
         SETTLE=110; TRIES=4; EARLY_EXIT_SECS=60
     done
 fi
-[ -n "$PROFILE_NAME" ] || { EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; DLLOVERRIDES=""; RECOVER_KILL=""; }
+[ -n "$PROFILE_NAME" ] || { EXTRA_ARGS=""; SINGLE_INSTANCE_PATTERN=""; WATCH_LOG=""; OK_LOG=""; DLLOVERRIDES=""; RECOVER_KILL=""; EXTRA_ENV=""; }
+# per-program environment (e.g. FEX options such as FEX_TSOENABLED=0), "VAR=value VAR2=value" from the profile
+for kv in $EXTRA_ENV; do export "$kv"; done
 # DXMT (d3d11/dxgi -> Metal) by default; a profile can narrow this (Chromium programs start much faster without it)
 export WINEDLLOVERRIDES="${FEX_DLLOVERRIDES:-${DLLOVERRIDES:-${WINEDLLOVERRIDES:-d3d11,dxgi=b;winemetal=b}}}"
 [ -n "$PROFILE_NAME" ] && log "profile '$PROFILE_NAME' for $EXE_NAME"
