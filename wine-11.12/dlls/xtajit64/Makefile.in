@@ -1,0 +1,12 @@
+MODULE    = xtajit64.dll
+IMPORTS   = ntdll
+EXTRADEFS = -D_CRTIMP=
+
+EXTRADLLFLAGS = -nodefaultlibs
+
+SOURCES = \
+	cpu.c \
+	vkmt/context.c \
+	vkmt/dispatch.c \
+	vkmt/jit.c \
+	vkmt/interp.c
