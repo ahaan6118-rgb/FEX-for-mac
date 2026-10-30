@@ -12,10 +12,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var recentMenu: NSPopUpButton!
     var isRunning = false
     var currentProcess: Process?
-    var wineserverProcess: Process?
 
     static let recentAppsKey = "RecentApps"
     static let maxRecent = 10
+    static let prefixDir = NSHomeDirectory() + "/.fex-for-mac"
 
     static func main() {
         let app = NSApplication.shared
@@ -27,6 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
+        migrateOldPrefix()
         setupMenuBar()
         setupWindow()
 
@@ -47,8 +48,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        appendOutput("FEX for Mac v0.3.0\n")
-        appendOutput("x86_64 Windows PE \u{2192} ARM64 macOS via FEXCore + DXMT\n")
+        appendOutput("FEX for Mac v0.5.0 beta (32-bit Windows programs)\n")
+        appendOutput("x86_64/i386 Windows PE \u{2192} ARM64 macOS via Wine WoW64 + FEXCore JIT\n")
         appendOutput("RPG Maker games run natively via mkxp-z + ANGLE Metal\n\n")
         appendOutput("Drop a .exe here, browse with \"Open\", or pick a recent app.\n")
     }
@@ -67,6 +68,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenuItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Open .exe...", action: #selector(openExeClicked), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Launch Steam", action: #selector(launchSteamClicked), keyEquivalent: "l")
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Clear Recent", action: #selector(clearRecent), keyEquivalent: "")
         fileMenuItem.submenu = fileMenu
@@ -102,7 +104,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         titleLabel.autoresizingMask = [.maxXMargin, .minYMargin]
         contentView.addSubview(titleLabel)
 
-        let subtitleLabel = NSTextField(labelWithString: "D3D11 \u{2192} Metal  \u{2022}  FEXCore JIT  \u{2022}  Wine 11")
+        let subtitleLabel = NSTextField(labelWithString: "Wine WoW64  \u{2022}  FEXCore JIT  \u{2022}  DXMT Metal")
         subtitleLabel.font = NSFont.systemFont(ofSize: 11, weight: .regular)
         subtitleLabel.textColor = .tertiaryLabelColor
         subtitleLabel.frame = NSRect(x: 20, y: windowHeight - 70, width: 400, height: 16)
@@ -160,6 +162,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stopButton.isEnabled = false
         stopButton.autoresizingMask = [.maxXMargin, .minYMargin]
         contentView.addSubview(stopButton)
+
+        let steamButton = NSButton(title: "Steam", target: self, action: #selector(launchSteamClicked))
+        steamButton.bezelStyle = .rounded
+        steamButton.frame = NSRect(x: 432, y: windowHeight - 148, width: 90, height: 28)
+        steamButton.autoresizingMask = [.maxXMargin, .minYMargin]
+        contentView.addSubview(steamButton)
 
         // Recent apps dropdown
         recentMenu = NSPopUpButton(frame: NSRect(x: 220, y: windowHeight - 148, width: 200, height: 28))
@@ -248,11 +256,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         runExe(path: path)
     }
 
+    /// Starts the Windows Steam client installed in the prefix (fex-run applies the Steam profile: flags, restart on freeze).
+    @objc func launchSteamClicked() {
+        let steamExe = Self.prefixDir + "/drive_c/Program Files/Steam/steam.exe"
+        guard FileManager.default.fileExists(atPath: steamExe) else {
+            let alert = NSAlert()
+            alert.messageText = "Steam is not installed yet"
+            alert.informativeText = "Install it by opening SteamSetup.exe with this app (File \u{2192} Open .exe...). After that, the Steam button starts it."
+            alert.runModal()
+            return
+        }
+        pathField.stringValue = steamExe
+        runExe(path: steamExe)
+    }
+
     @objc func stopClicked() {
         guard isRunning else { return }
         appendInfo("\nStopping...\n")
         currentProcess?.terminate()
-        killWineserver()
+        let wineDir = Bundle.main.bundlePath + "/Contents/Resources/wine"
+        if FileManager.default.fileExists(atPath: wineDir + "/bin/wineserver") {
+            if FileManager.default.isExecutableFile(atPath: wineDir + "/../bin/fex-run") {
+                // fex-run asks the program to quit by itself first (Steam saves its login that way) and stops
+                // the Wine server when done; only force it here if that takes too long.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
+                    if self?.isRunning == true { self?.killWineserver() }
+                }
+            } else {
+                killWineserver()
+            }
+        }
     }
 
     @objc func openExeClicked() {
@@ -283,19 +316,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showAbout() {
         let alert = NSAlert()
-        alert.messageText = "FEX for Mac v0.3.0"
+        alert.messageText = "FEX for Mac v0.5.0 beta"
         alert.informativeText = """
-        x86_64 Windows PE \u{2192} ARM64 macOS
+        32-bit Windows programs \u{2192} ARM64 macOS (beta; 64-bit x86 is not supported yet)
 
-        FEXCore JIT Translation
-        DXMT D3D11 \u{2192} Metal Rendering
-        Wine 11 Compatibility Layer
-        mkxp-z Native RPG Maker Engine
+        Free for non-commercial use (PolyForm Noncommercial 1.0.0).
+        Not for sale. Third-party parts keep their own licenses.
+
+        Built on the work of:
+        \u{2022} Wine (winehq.org) \u{2014} Windows compatibility layer
+        \u{2022} FEX-Emu (fex-emu.com) \u{2014} x86/x86-64 JIT for ARM64
+        \u{2022} MetalSharp / VKMT-Wine \u{2014} ARM64 macOS Wine patches,
+          WoW64 provider architecture, x18\u{2192}x28 TEB fix
+        \u{2022} DXMT \u{2014} D3D11 to Metal translation
+        \u{2022} MoltenVK \u{2014} Vulkan to Metal
+        \u{2022} mkxp-z \u{2014} Native RPG Maker engine
 
         No Rosetta 2 required.
         """
         alert.alertStyle = .informational
         alert.runModal()
+    }
+
+    // MARK: - Prefix Migration
+
+    func migrateOldPrefix() {
+        let oldPath = NSHomeDirectory() + "/.rosetta-killer"
+        let fm = FileManager.default
+        if fm.fileExists(atPath: oldPath) && !fm.fileExists(atPath: Self.prefixDir) {
+            try? fm.moveItem(atPath: oldPath, toPath: Self.prefixDir)
+        }
     }
 
     // MARK: - Recent Apps
@@ -325,9 +375,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Run
 
-    func runExe(path: String, directEntry: String? = nil) {
+    func runExe(path: String) {
+        let path = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isRunning else {
             appendError("Already running. Stop the current app first.\n")
+            return
+        }
+        guard !path.isEmpty else {
+            appendError("No executable selected.\n")
             return
         }
         isRunning = true
@@ -346,7 +401,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            if let launcher = self.detectPyInstallerLauncher(exePath: path) {
+            if self.isPyInstallerExe(path: path), let launcher = self.detectPyInstallerLauncher(exePath: path) {
                 self.runPyInstallerLauncher(launcher: launcher)
             } else if self.isPyInstallerExe(path: path) {
                 self.appendInfo("PyInstaller app detected. Extracting bundle...\n")
@@ -354,14 +409,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 if let launcher = self.detectPyInstallerLauncher(exePath: path) {
                     self.runPyInstallerLauncher(launcher: launcher)
                 } else {
-                    self.executeWine(exePath: path, directEntry: directEntry)
+                    self.executeWine(exePath: path)
                 }
             } else {
                 let gameDir = URL(fileURLWithPath: path).deletingLastPathComponent().path
                 if let rgssVersion = self.detectRPGMaker(gameDir: gameDir) {
                     self.launchWithMkxpz(gameDir: gameDir, rgssVersion: rgssVersion)
                 } else {
-                    self.executeWine(exePath: path, directEntry: directEntry)
+                    self.executeWine(exePath: path)
                 }
             }
         }
@@ -391,9 +446,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         process.executableURL = URL(fileURLWithPath: wineBin)
         process.arguments = [exePath]
         process.environment = baseEnv
-        let devNull = Pipe()
-        process.standardOutput = devNull
-        process.standardError = devNull
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         do {
             try process.run()
             Thread.sleep(forTimeInterval: 5)
@@ -403,7 +457,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func detectPyInstallerLauncher(exePath: String) -> PyInstallerLauncher? {
-        let prefixPath = NSHomeDirectory() + "/.rosetta-killer"
+        let prefixPath = Self.prefixDir
         let windowsDir = prefixPath + "/drive_c/windows"
         let fm = FileManager.default
 
@@ -442,7 +496,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appendInfo("Detected PyInstaller game launcher.\n")
         appendInfo("GUI rendering is not supported under FEXCore \u{2014} using headless mode.\n\n")
 
-        let prefixPath = NSHomeDirectory() + "/.rosetta-killer"
+        let prefixPath = Self.prefixDir
         let gamesDir = prefixPath + "/drive_c/users/" + NSUserName() + "/Games"
 
         let game = launcher.games[0]
@@ -485,6 +539,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             try gitProcess.run()
             gitProcess.waitUntilExit()
         } catch {
+            pipe.fileHandleForReading.readabilityHandler = nil
             appendError("Failed to run git clone: \(error.localizedDescription)\n")
             DispatchQueue.main.async { [weak self] in
                 self?.markStopped(status: "Install failed", color: .systemRed)
@@ -523,7 +578,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let rgssVersion = detectRPGMaker(gameDir: gameDir) {
             launchWithMkxpz(gameDir: gameDir, rgssVersion: rgssVersion)
         } else {
-            executeWine(exePath: gameExe, directEntry: nil)
+            executeWine(exePath: gameExe)
         }
     }
 
@@ -535,8 +590,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         for line in contents.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.lowercased().hasPrefix("library=") else { continue }
-            let lib = trimmed.dropFirst("library=".count).trimmingCharacters(in: .whitespaces).lowercased()
+            guard let eqIdx = trimmed.firstIndex(of: "=") else { continue }
+            let key = trimmed[..<eqIdx].trimmingCharacters(in: .whitespaces).lowercased()
+            guard key == "library" else { continue }
+            let lib = trimmed[trimmed.index(after: eqIdx)...].trimmingCharacters(in: .whitespaces).lowercased()
             if lib.contains("rgss1") { return 1 }
             if lib.contains("rgss2") { return 2 }
             if lib.contains("rgss3") { return 3 }
@@ -593,17 +650,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         currentProcess = process
 
+        var launchFailed = false
         do {
             try process.run()
             process.waitUntilExit()
         } catch {
             appendError("\nFailed to launch mkxp-z: \(error.localizedDescription)\n")
+            launchFailed = true
         }
 
         pipe.fileHandleForReading.readabilityHandler = nil
         currentProcess = nil
 
-        let exitCode = process.terminationStatus
+        let exitCode: Int32 = launchFailed ? -1 : process.terminationStatus
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.markStopped(
@@ -636,7 +695,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if fontSubs.isEmpty {
             fontSubJson = ""
         } else {
-            let entries = fontSubs.map { "\"\($0)\"" }.joined(separator: ",\n            ")
+            let entries = fontSubs.map { sub -> String in
+                let escaped = sub.replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "\"", with: "\\\"")
+                return "\"\(escaped)\""
+            }.joined(separator: ",\n            ")
             fontSubJson = ",\n        \"fontSub\": [\n            \(entries)\n        ]"
         }
 
@@ -730,10 +793,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let bundleContents = Bundle.main.bundlePath + "/Contents"
         let wineDir = bundleContents + "/Resources/wine"
         var env = ProcessInfo.processInfo.environment
-        env["FEXBRIDGE_PATH"] = bundleContents + "/Frameworks/libfexbridge.dylib"
-        env["WINEPREFIX"] = NSHomeDirectory() + "/.rosetta-killer"
-        env["WINEDLLPATH"] = wineDir + "/lib/wine/x86_64-windows"
+        env["WINEPREFIX"] = Self.prefixDir
         env["WINESERVER"] = wineDir + "/bin/wineserver"
+        env["WINELOADERNOEXEC"] = "1"
         env["WINEDEBUG"] = "-all"
         env["DYLD_LIBRARY_PATH"] = wineDir + "/lib:" + bundleContents + "/Frameworks"
         env["DYLD_FALLBACK_LIBRARY_PATH"] = bundleContents + "/Frameworks:" + wineDir + "/lib:/usr/lib"
@@ -746,10 +808,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func initWinePrefix(wineDir: String, env: [String: String]) -> Bool {
-        let prefixPath = NSHomeDirectory() + "/.rosetta-killer"
+        let prefixPath = Self.prefixDir
         let systemReg = prefixPath + "/system.reg"
         let dosdevices = prefixPath + "/dosdevices/z:"
+
         if FileManager.default.fileExists(atPath: systemReg) && FileManager.default.fileExists(atPath: dosdevices) {
+            createPrefixDirectories(prefixPath: prefixPath)
             populateSystem32(prefixPath: prefixPath, env: env)
             return true
         }
@@ -757,11 +821,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appendInfo("Initializing Wine prefix (first run, may take a moment)...\n")
 
         let boot = Process()
-        boot.executableURL = URL(fileURLWithPath: wineDir + "/bin/wineboot")
-        boot.arguments = ["--init"]
+        boot.executableURL = URL(fileURLWithPath: wineDir + "/bin/wine")
+        boot.arguments = ["wineboot", "--init"]
         var bootEnv = env
         bootEnv["WINEDEBUG"] = "-all"
-        bootEnv["WINEBOOTSTRAPMODE"] = "1"
         boot.environment = bootEnv
 
         let pipe = Pipe()
@@ -780,11 +843,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             try boot.run()
             boot.waitUntilExit()
         } catch {
+            pipe.fileHandleForReading.readabilityHandler = nil
             appendError("Failed to run wineboot: \(error.localizedDescription)\n")
             return false
         }
 
         pipe.fileHandleForReading.readabilityHandler = nil
+
+        // Wait for wineserver to flush registry to disk before checking
+        if let serverPath = env["WINESERVER"] {
+            let wait = Process()
+            wait.executableURL = URL(fileURLWithPath: serverPath)
+            wait.arguments = ["-w"]
+            wait.environment = env
+            try? wait.run()
+            wait.waitUntilExit()
+        }
 
         let prefixOK = FileManager.default.fileExists(atPath: prefixPath + "/system.reg")
         if boot.terminationStatus != 0 && !prefixOK {
@@ -792,34 +866,92 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
+        createPrefixDirectories(prefixPath: prefixPath)
         populateSystem32(prefixPath: prefixPath, env: env)
+
+        // Fix arch tag — wineboot under x86_64 JIT may write win32
+        for reg in ["system.reg", "user.reg", "userdef.reg"] {
+            let path = prefixPath + "/" + reg
+            if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                let fixed = content.replacingOccurrences(of: "#arch=win32", with: "#arch=win64")
+                if fixed != content {
+                    try? fixed.write(toFile: path, atomically: true, encoding: .utf8)
+                }
+            }
+        }
 
         appendInfo("Wine prefix ready.\n\n")
         return true
     }
 
+    func createPrefixDirectories(prefixPath: String) {
+        let fm = FileManager.default
+        let dirs = [
+            prefixPath + "/drive_c/windows/system32",
+            prefixPath + "/drive_c/windows/syswow64",
+            prefixPath + "/drive_c/windows/temp",
+            prefixPath + "/drive_c/users/" + NSUserName() + "/AppData/Local",
+            prefixPath + "/drive_c/users/" + NSUserName() + "/AppData/Roaming",
+            prefixPath + "/drive_c/users/" + NSUserName() + "/AppData/LocalLow",
+            prefixPath + "/drive_c/users/" + NSUserName() + "/Documents",
+            prefixPath + "/drive_c/users/" + NSUserName() + "/Desktop",
+            prefixPath + "/drive_c/users/" + NSUserName() + "/Downloads",
+            prefixPath + "/drive_c/users/Public/Temp",
+            prefixPath + "/drive_c/ProgramData",
+            prefixPath + "/drive_c/Program Files",
+            prefixPath + "/drive_c/Program Files (x86)",
+            prefixPath + "/dosdevices",
+        ]
+        for dir in dirs {
+            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        }
+        let cLink = prefixPath + "/dosdevices/c:"
+        let zLink = prefixPath + "/dosdevices/z:"
+        if !fm.fileExists(atPath: cLink) {
+            try? fm.createSymbolicLink(atPath: cLink, withDestinationPath: "../drive_c")
+        }
+        if !fm.fileExists(atPath: zLink) {
+            try? fm.createSymbolicLink(atPath: zLink, withDestinationPath: "/")
+        }
+    }
+
     func populateSystem32(prefixPath: String, env: [String: String]) {
         let fm = FileManager.default
-        guard let dllPath = env["WINEDLLPATH"] else { return }
+        let bundleContents = Bundle.main.bundlePath + "/Contents"
+        let wineDir = bundleContents + "/Resources/wine"
+        let wineLib = wineDir + "/lib/wine"
+
         let sys32 = prefixPath + "/drive_c/windows/system32"
-        guard let files = try? fm.contentsOfDirectory(atPath: dllPath) else { return }
+        let syswow64 = prefixPath + "/drive_c/windows/syswow64"
+        try? fm.createDirectory(atPath: sys32, withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: syswow64, withIntermediateDirectories: true)
+
         let extensions: Set<String> = ["dll", "exe", "drv", "sys", "ocx", "cpl", "acm", "ax"]
-        var count = 0
-        for file in files {
-            let ext = (file as NSString).pathExtension.lowercased()
-            guard extensions.contains(ext) else { continue }
-            let dest = sys32 + "/" + file
-            if fm.fileExists(atPath: dest) { continue }
-            let src = dllPath + "/" + file
-            try? fm.createSymbolicLink(atPath: dest, withDestinationPath: src)
-            count += 1
-        }
-        if count > 0 {
-            appendInfo("Populated system32 with \(count) Wine DLLs.\n")
+
+        func linkPEs(from archDir: String, to destDir: String) -> Int {
+            guard let files = try? fm.contentsOfDirectory(atPath: archDir) else { return 0 }
+            var count = 0
+            for file in files {
+                let ext = (file as NSString).pathExtension.lowercased()
+                guard extensions.contains(ext) else { continue }
+                let dest = destDir + "/" + file
+                if fm.fileExists(atPath: dest) { continue }
+                let src = archDir + "/" + file
+                try? fm.createSymbolicLink(atPath: dest, withDestinationPath: src)
+                count += 1
+            }
+            return count
         }
 
-        let wineDir = (dllPath as NSString).deletingLastPathComponent
-            .replacingOccurrences(of: "/lib/wine", with: "")
+        var total = 0
+        total += linkPEs(from: wineLib + "/aarch64-windows", to: sys32)
+        total += linkPEs(from: wineLib + "/arm64ec-windows", to: sys32)
+        total += linkPEs(from: wineLib + "/x86_64-windows", to: sys32)
+        total += linkPEs(from: wineLib + "/i386-windows", to: syswow64)
+        if total > 0 {
+            appendInfo("Populated system32/syswow64 with \(total) Wine DLLs.\n")
+        }
+
         let fontsDir = prefixPath + "/drive_c/windows/Fonts"
         let fontsSrc = wineDir + "/share/wine/fonts"
         try? fm.createDirectory(atPath: fontsDir, withIntermediateDirectories: true)
@@ -863,33 +995,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func executeWine(exePath: String, directEntry: String?) {
-        appendInfo("Pipeline: x86_64 PE \u{2192} FEXCore JIT \u{2192} ARM64 + DXMT Metal\n\n")
+    func executeWine(exePath: String) {
+        appendInfo("Pipeline: PE \u{2192} Wine WoW64 \u{2192} FEXCore JIT \u{2192} ARM64 + DXMT Metal\n\n")
         let (_, wineDir, baseEnv) = makeWineEnv()
 
         if !initWinePrefix(wineDir: wineDir, env: baseEnv) {
             DispatchQueue.main.async { [weak self] in
-                self?.isRunning = false
-                self?.runButton.isEnabled = true
-                self?.stopButton.isEnabled = false
-                self?.openButton.isEnabled = true
-                self?.statusLabel.stringValue = "Error"
-                self?.statusLabel.textColor = .systemRed
+                self?.markStopped(status: "Error", color: .systemRed)
             }
             return
         }
 
-        var env = baseEnv
+        let env = baseEnv
         let wineBin = wineDir + "/bin/wine"
 
+        // fex-run (bundled) applies the per-program profile (flags, DLL overrides, restart on startup freeze)
+        // and the FEX settings Chromium-based programs need; fall back to plain wine if it is missing.
+        let runner = wineDir + "/../bin/fex-run"
+        let useRunner = FileManager.default.isExecutableFile(atPath: runner)
+
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: wineBin)
+        process.executableURL = URL(fileURLWithPath: useRunner ? runner : wineBin)
         process.arguments = [exePath]
         process.currentDirectoryURL = URL(fileURLWithPath: exePath).deletingLastPathComponent()
-
-        if let entry = directEntry {
-            env["FEXBRIDGE_DIRECT"] = entry
-        }
         process.environment = env
 
         let pipe = Pipe()
@@ -906,37 +1034,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         currentProcess = process
 
+        var launchFailed = false
         do {
             try process.run()
             process.waitUntilExit()
         } catch {
             appendError("\nFailed to launch: \(error.localizedDescription)\n")
+            launchFailed = true
         }
 
         pipe.fileHandleForReading.readabilityHandler = nil
         currentProcess = nil
 
-        let exitCode = process.terminationStatus
+        let exitCode: Int32 = launchFailed ? -1 : process.terminationStatus
+        if exitCode == 0 {
+            appendOutput("\nFinished (exit 0)\n")
+        } else if exitCode == 15 {
+            appendInfo("\nStopped by user\n")
+        } else {
+            appendError("\nExited with code \(exitCode)\n")
+        }
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.isRunning = false
-            self.runButton.isEnabled = true
-            self.stopButton.isEnabled = false
-            self.openButton.isEnabled = true
-
-            if exitCode == 0 {
-                self.appendOutput("\nFinished (exit 0)\n")
-                self.statusLabel.stringValue = "Ready"
-                self.statusLabel.textColor = .systemGreen
-            } else if exitCode == 15 {
-                self.appendInfo("\nStopped by user\n")
-                self.statusLabel.stringValue = "Stopped"
-                self.statusLabel.textColor = .secondaryLabelColor
-            } else {
-                self.appendError("\nExited with code \(exitCode)\n")
-                self.statusLabel.stringValue = "Exit: \(exitCode)"
-                self.statusLabel.textColor = .systemRed
-            }
+            self?.markStopped(
+                status: exitCode == 0 ? "Ready" : (exitCode == 15 ? "Stopped" : "Exit: \(exitCode)"),
+                color: exitCode == 0 ? .systemGreen : (exitCode == 15 ? .secondaryLabelColor : .systemRed)
+            )
         }
     }
 
@@ -947,7 +1069,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         proc.executableURL = URL(fileURLWithPath: wineDir + "/bin/wineserver")
         proc.arguments = ["-k"]
         proc.environment = [
-            "WINEPREFIX": NSHomeDirectory() + "/.rosetta-killer"
+            "WINEPREFIX": Self.prefixDir
         ]
         try? proc.run()
     }
@@ -973,7 +1095,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         currentProcess?.terminate()
-        killWineserver()
+        // let fex-run close the program politely (up to ~45 s) before the Wine server is stopped
+        let deadline = Date().addingTimeInterval(45)
+        while let p = currentProcess, p.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.25) }
+        let wineDir = Bundle.main.bundlePath + "/Contents/Resources/wine"
+        if FileManager.default.fileExists(atPath: wineDir + "/bin/wineserver") {
+            killWineserver()
+        }
     }
 }
 
