@@ -601,6 +601,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return nil
     }
 
+    /// Infinite Fusion downloads Data/Scripts/DownloadedSettings.rb on every start, and the current upstream copy
+    /// blanks the sprite download URLs ("") that the game's own Settings define. Drop those blank overrides so the
+    /// built-in URLs stay in effect. Only lines whose constant has a non-blank default in 001_Settings.rb are touched.
+    func restoreBlankedDownloadURLs(gameDir: String) {
+        let scripts = gameDir + "/Data/Scripts"
+        let downloaded = scripts + "/DownloadedSettings.rb"
+        guard let defaults = try? String(contentsOfFile: scripts + "/001_Settings.rb", encoding: .utf8),
+              let current = try? String(contentsOfFile: downloaded, encoding: .utf8),
+              let blank = try? NSRegularExpression(pattern: "^\\s*([A-Z0-9_]+_URL)\\s*=\\s*\"\"\\s*$") else { return }
+        var removed: [String] = []
+        let kept = current.components(separatedBy: "\n").filter { line in
+            let range = NSRange(line.startIndex..., in: line)
+            guard let m = blank.firstMatch(in: line, range: range),
+                  let r = Range(m.range(at: 1), in: line) else { return true }
+            let name = String(line[r])
+            guard defaults.range(of: "\(name) = \"http") != nil else { return true }
+            removed.append(name)
+            return false
+        }
+        guard !removed.isEmpty else { return }
+        do {
+            try kept.joined(separator: "\n").write(toFile: downloaded, atomically: true, encoding: .utf8)
+            appendInfo("Restored \(removed.count) sprite download URL(s) in DownloadedSettings.rb\n")
+        } catch {
+            appendError("Could not update DownloadedSettings.rb: \(error.localizedDescription)\n")
+        }
+    }
+
     func launchWithMkxpz(gameDir: String, rgssVersion: Int) {
         let engineNames = [1: "RPG Maker XP", 2: "RPG Maker VX", 3: "RPG Maker VX Ace"]
         let engineName = engineNames[rgssVersion] ?? "RPG Maker"
@@ -619,6 +647,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         ensureArialFonts(gameDir: gameDir)
+        restoreBlankedDownloadURLs(gameDir: gameDir)
 
         let mkxpJson = generateMkxpJson(gameDir: gameDir, rgssVersion: rgssVersion)
         let mkxpzDir = bundleResources + "/mkxp-z"
