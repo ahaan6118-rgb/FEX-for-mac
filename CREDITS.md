@@ -60,3 +60,8 @@ https://github.com/mstorsjo/llvm-mingw
 
 This project would not be possible without the open-source community. If you're
 using FEX for Mac, please consider supporting these upstream projects.
+
+## Local FEX patches (not submitted upstream)
+Small local build fixes to FEX (MIT) so it compiles with LLVM 23: `patches/fex-arm64ec-newer-toolchain-includes.patch`
+(three missing standard-library includes) and `patches/fex-callret-guard-16k.patch` (16 KiB host pages on macOS).
+These stay in this fork and are not contributed to the FEX project.

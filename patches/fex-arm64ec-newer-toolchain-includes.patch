@@ -1,0 +1,36 @@
+diff --git a/FEXCore/Source/Common/StringConv.h b/FEXCore/Source/Common/StringConv.h
+index e4b2dad..b45cc11 100644
+--- a/FEXCore/Source/Common/StringConv.h
++++ b/FEXCore/Source/Common/StringConv.h
+@@ -3,6 +3,7 @@
+ #include <FEXCore/fextl/string.h>
+ 
+ #include <concepts>
++#include <cstdlib>
+ #include <string_view>
+ 
+ namespace FEXCore::StrConv {
+diff --git a/Source/Windows/Common/CRT/Alloc.cpp b/Source/Windows/Common/CRT/Alloc.cpp
+index 3d5f60d..0e11be2 100644
+--- a/Source/Windows/Common/CRT/Alloc.cpp
++++ b/Source/Windows/Common/CRT/Alloc.cpp
+@@ -2,6 +2,7 @@
+ #define _SECIMP
+ #define _CRTIMP
+ #include <cstdint>
++#include <cstdlib>
+ #include "../Priv.h"
+ #include <rpmalloc/rpmalloc.h>
+ 
+diff --git a/Source/Windows/Common/CRT/IO.cpp b/Source/Windows/Common/CRT/IO.cpp
+index 0f4704a..c90f695 100644
+--- a/Source/Windows/Common/CRT/IO.cpp
++++ b/Source/Windows/Common/CRT/IO.cpp
+@@ -8,6 +8,7 @@ struct FILE;
+ #include <vector>
+ #include <mutex>
+ #include <algorithm>
++#include <cstdarg>
+ #include <cstdlib>
+ #include <cstdio>
+ #include <cstdint>
