@@ -50,6 +50,7 @@ https://github.com/KhronosGroup/MoltenVK
 Open-source reimplementation of the RPG Maker XP/VX/VX Ace runtime, enabling
 RPG Maker games to run natively on ARM64 macOS without Wine.
 https://github.com/mkxp-z/mkxp-z
+The bundled build is linked with OpenSSL (Apache-2.0) for HTTPS, so it is distributed under GPL-3.0.
 
 ### llvm-mingw
 MinGW toolchain based on LLVM, used for cross-compiling Windows PE binaries

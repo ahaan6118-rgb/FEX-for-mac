@@ -20,7 +20,9 @@ SCOPE - what this license covers
   including commercial rights:
     - wine-11.12/            Wine (LGPL-2.1-or-later) - our modifications are LGPL-2.1-or-later too
     - patches/fex-*          FEX (MIT) - patches are MIT like the code they modify
-    - mkxp-z-patches/        mkxp-z (GPL-2.0-or-later) - patches are GPL-2.0-or-later
+    - mkxp-z-patches/        mkxp-z (GPL-2.0-or-later) - patches are GPL-2.0-or-later. The bundled mkxp-z
+                             binary is linked with OpenSSL (Apache-2.0) for HTTPS, so as distributed
+                             it is under GPL-3.0 (GPL-2.0-or-later is not compatible with Apache-2.0)
     - bundled libraries      see THIRD_PARTY_LICENSES.md (FreeType, GnuTLS, MoltenVK, ...)
   A file with its own license header is governed by that header.
 

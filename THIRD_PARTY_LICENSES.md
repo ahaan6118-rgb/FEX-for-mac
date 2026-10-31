@@ -89,7 +89,9 @@ Wine 11.12 from https://www.winehq.org/ with these files applied on top.
 ## mkxp-z
 
 - **Project**: https://github.com/mkxp-z/mkxp-z
-- **License**: GNU General Public License v2.0 or later (GPL-2.0+)
+- **License**: GNU General Public License v2.0 or later (GPL-2.0+); the bundled
+  binary is linked with OpenSSL (Apache-2.0) for HTTPS downloads, so as
+  distributed it is licensed under **GPL-3.0**
 - **Usage**: Native ARM64 RPG Maker XP/VX/VX Ace engine (mkxp-z.aarch64)
 - **Copyright**: Copyright (C) 2013-2021 Amaryllis Kulla and contributors
 - **Note**: Our modifications to mkxp-z (CWD restore for ANGLE Metal
@@ -104,6 +106,8 @@ Wine 11.12 from https://www.winehq.org/ with these files applied on top.
 - **OpenAL Soft** — LGPL-2.1 — https://openal-soft.org/
 - **Ruby 3.1** — BSD 2-Clause — https://www.ruby-lang.org/
 - **PhysFS** — zlib License — https://icculus.org/physfs/
+- **OpenSSL 4** — Apache License 2.0 — https://www.openssl.org/ (dynamic libs
+  `libssl.4.dylib`, `libcrypto.4.dylib` in Frameworks; lets games download files over HTTPS)
 - **SDL2_image** — zlib License
 - **SDL2_ttf** — zlib License
 - **SDL_sound** — zlib License
