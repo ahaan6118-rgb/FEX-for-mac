@@ -1,9 +1,10 @@
-# FEX for Mac — beta (0.5.0)
+# FEX for Mac — beta (0.6.0)
 
 Run Windows programs and games on Apple silicon Macs **without Rosetta 2**.
 
-> **Beta, 32-bit only.** 32-bit (i386) Windows programs are supported. **64-bit x86 programs are not
-> supported yet** (see [Status](#status)). Expect rough edges.
+> **Beta.** 32-bit (i386) Windows programs are supported. **64-bit x86 programs now work, but this is
+> experimental and in an early stage**: simple programs and some real ones run, many others will not, and
+> **Steam's current 64-bit client has not been tested yet** (see [Status](#status)). Expect rough edges.
 
 Free to use, **not for sale** — see [License](#license).
 
@@ -28,8 +29,8 @@ Tested on an M1 Mac, macOS 26.
 
 | Not working / limited | |
 |---|---|
-| **64-bit x86 programs** | The bundled 64-bit emulator is an unfinished interpreter, not FEX. Most 64-bit programs fail. Real 64-bit support (FEX ARM64EC) is the next big project |
-| **Current Steam client** | Valve's current client needs 64-bit emulation. We run the old 32-bit one; it shows a "Steam will stop running on Windows 8" banner and may stop working when Valve enforces that |
+| **64-bit x86 programs (experimental, early)** | Run through FEX's ARM64EC build (bundled as `fex64/libarm64ecfex.dll`, set up automatically the first time you open a 64-bit `.exe`). Simple programs, a 64-bit RPG Maker game (it starts and draws) and the Pokémon Infinite Fusion launcher work. Sound, controls and speed in games are not fully checked, performance is untuned, and many programs will crash or hang. Programs that read Windows' shared system page (`0x7ffe0000`) directly will fail on Apple silicon |
+| **Current Steam client** | **Not tested yet** on the 64-bit emulator. Valve's current client is 64-bit, so we still run the old 32-bit one; it shows a "Steam will stop running on Windows 8" banner and may stop working when Valve enforces that |
 | Startup freezes | The embedded Chromium in Steam sometimes freezes at start (roughly 1 in 3 launches). The app restarts it automatically; this costs a minute or two |
 | Exit crash dialog | Some games show a crash dialog when closing (a sound-library thread outliving its DLL) |
 | Untested | Direct3D 11 games through DXMT, controllers, most of the Steam store |
@@ -78,9 +79,11 @@ scripts/install-runner.sh FEXforMac.app
 [PolyForm Noncommercial License 1.0.0](LICENSE). You may not sell it or use it to make money.**
 It is "source-available", not OSI open source.
 
-The license covers only the project's original work. Wine (LGPL-2.1+), FEX (MIT), mkxp-z (GPL-2.0+),
+The license covers only the project's original work. Wine (LGPL-2.1+), FEX (MIT), mkxp-z (GPL-2.0+, GPL-3.0 as distributed),
 and the other bundled components keep their own licenses and rights — see
-[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Version 0.3.0 was published under MIT
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and the license texts in [licenses/](licenses/).
+Parts of this project were written with AI assistance; **please do not send this code to the FEX-Emu
+project** (a condition of the license). Version 0.3.0 was published under MIT
 ([LICENSE-MIT-v0.3.0.txt](LICENSE-MIT-v0.3.0.txt)) and remains available under MIT.
 
 Not affiliated with or endorsed by Valve, CodeWeavers, Apple or the Wine project. Steam is a

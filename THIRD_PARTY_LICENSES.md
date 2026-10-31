@@ -77,6 +77,25 @@ Loaded by Wine's schannel/PFX support (libgnutls.30.dylib and friends, from Home
 LGPL-2.1-or-later like the rest of Wine. The complete corresponding source of a binary release is
 Wine 11.12 from https://www.winehq.org/ with these files applied on top.
 
+## 64-bit emulator (FEX ARM64EC) - experimental
+
+- **Project**: https://github.com/FEX-Emu/FEX (the FEX-2607 snapshot)
+- **License**: MIT (Copyright (c) 2019 Ryan Houdek and FEX-Emu contributors) - `licenses/FEX-MIT.txt`
+- **Usage**: `libarm64ecfex.dll`, the ARM64EC build of FEX that runs 64-bit x86 Windows programs
+  (bundled at `FEXforMac.app/Contents/Resources/fex64/`)
+- **Our changes**: `patches/fex-arm64ec-*.patch` (MIT, same as FEX). These patches were written with AI
+  assistance; the FEX-Emu project does not accept AI-generated code, so **do not send them to FEX-Emu**
+  (see the "No Contributions to FEX-Emu" condition in LICENSE).
+- **Statically linked into the DLL**: LLVM libc++, libc++abi, compiler-rt (Apache-2.0 with LLVM
+  exceptions - `licenses/LLVM-Apache-2.0-with-LLVM-exception.txt`) and the mingw-w64 runtime
+  (public domain / ZPL-2.1 / permissive; https://www.mingw-w64.org/).
+
+## Wine changes for 64-bit support
+
+`patches/wine-arm64ec-*.patch` change Wine's ARM64EC exception unwinding and syscall stubs
+(LGPL-2.1-or-later like the rest of Wine - `licenses/Wine-LGPL-2.1.txt`). As for the earlier Wine changes,
+the complete corresponding source is Wine 11.12 from https://www.winehq.org/ plus `wine-11.12/` and `patches/`.
+
 ## Not included
 
 - **Steam** (Valve Corporation) is proprietary and is not distributed with FEX for Mac. Users download
@@ -120,7 +139,10 @@ Wine 11.12 from https://www.winehq.org/ with these files applied on top.
 
 ## Full License Texts
 
-The full text of each license can be found at:
+License texts shipped in this repository (`licenses/`) and in the app (`Contents/Resources/licenses/`):
+MIT (FEX), LGPL-2.1 (Wine), GPL-3.0 (mkxp-z as distributed), Apache-2.0 (OpenSSL, MoltenVK, Vulkan Loader),
+Apache-2.0 with LLVM exceptions (libc++ etc.), and the PolyForm Noncommercial license of the original work
+(`LICENSE`). The full text of every other license can be found at:
 
 - **MIT**: https://opensource.org/licenses/MIT
 - **LGPL-2.1**: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
