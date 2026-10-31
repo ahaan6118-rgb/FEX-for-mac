@@ -1,3 +1,15 @@
+diff --git a/FEXCore/Source/Common/StringConv.h b/FEXCore/Source/Common/StringConv.h
+index e4b2dad..b45cc11 100644
+--- a/FEXCore/Source/Common/StringConv.h
++++ b/FEXCore/Source/Common/StringConv.h
+@@ -3,6 +3,7 @@
+ #include <FEXCore/fextl/string.h>
+ 
+ #include <concepts>
++#include <cstdlib>
+ #include <string_view>
+ 
+ namespace FEXCore::StrConv {
 diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
 index bf2d0a5..67e818b 100644
 --- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
@@ -308,10 +320,69 @@ index 4c18172..6e7d9be 100644
    ldr x17, [x17, #0x20] // ChpeV2CpuAreaInfo->SuspendDoorbell
    ldr w17, [x17]
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 6ceecd8..d982a13 100644
+index 6ceecd8..1e776a7 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
-@@ -939,6 +939,7 @@ NTSTATUS ThreadInit() {
+@@ -70,6 +70,9 @@ extern IMAGE_DOS_HEADER __ImageBase; // Provided by the linker
+ 
+ extern void* ExitFunctionEC;
+ extern void* CheckCall;
++extern void* ExitToX64;
++extern void* DispatchJump;
++extern void* RetToEntryThunk;
+ extern void* ExitFunctionSuspendPoint;
+ extern void* ExitFunctionSuspendResumePoint;
+ 
+@@ -217,6 +220,40 @@ void PatchCallChecker() {
+   WriteModuleRVA(Module, CHPEMetadata->__os_arm64x_dispatch_icall_cfg, &CheckCall);
+ }
+ 
++// VKMT: Wine fills each EC module's __os_arm64x_dispatch_{call_no_redirect,fptr,ret} slots with this emulator's entry points when the
++// module is loaded. Modules loaded before the emulator (kernelbase, pulled in by the emulator's own C++ runtime imports) got NULL there,
++// so any of their functions called from x86 code jumped to address 0 on return. Fill those slots in for everything already loaded.
++void PatchEarlyLoadedModules() {
++  const auto Self = reinterpret_cast<uintptr_t>(&__ImageBase);
++  const auto* Ldr = reinterpret_cast<const uint8_t*>(reinterpret_cast<__TEB*>(NtCurrentTeb())->Peb->LdrData);
++  // PEB_LDR_DATA::InMemoryOrderModuleList is at +0x20, LDR_DATA_TABLE_ENTRY::DllBase is 0x20 bytes after InMemoryOrderLinks.
++  const auto* ListHead = reinterpret_cast<const LIST_ENTRY*>(Ldr + 0x20);
++  for (auto* Link = ListHead->Flink; Link != ListHead; Link = Link->Flink) {
++    const auto Module = *reinterpret_cast<HMODULE const*>(reinterpret_cast<const uint8_t*>(Link) + 0x20);
++    if (!Module || reinterpret_cast<uintptr_t>(Module) == Self) {
++      continue;
++    }
++
++    ULONG Size;
++    const auto* LoadConfig =
++      reinterpret_cast<_IMAGE_LOAD_CONFIG_DIRECTORY64*>(RtlImageDirectoryEntryToData(Module, true, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &Size));
++    if (!LoadConfig || Size <= offsetof(_IMAGE_LOAD_CONFIG_DIRECTORY64, CHPEMetadataPointer) || !LoadConfig->CHPEMetadataPointer) {
++      continue;
++    }
++
++    const auto* NtHeaders = RtlImageNtHeader(Module);
++    const auto ModuleBase = reinterpret_cast<uintptr_t>(Module);
++    if (!NtHeaders || LoadConfig->CHPEMetadataPointer <= ModuleBase || LoadConfig->CHPEMetadataPointer >= ModuleBase + NtHeaders->OptionalHeader.SizeOfImage) {
++      continue;
++    }
++
++    const auto* CHPEMetadata = reinterpret_cast<IMAGE_ARM64EC_METADATA*>(LoadConfig->CHPEMetadataPointer);
++    WriteModuleRVA(Module, CHPEMetadata->__os_arm64x_dispatch_call_no_redirect, &ExitToX64);
++    WriteModuleRVA(Module, CHPEMetadata->__os_arm64x_dispatch_fptr, &DispatchJump);
++    WriteModuleRVA(Module, CHPEMetadata->__os_arm64x_dispatch_ret, &RetToEntryThunk);
++  }
++}
++
+ // Fills in the syscall numbers necessary to call *Native variants of syscalls from FEX under wine.
+ void ParseWineSyscallNumbers(HMODULE NtDll) {
+   ULONG Size;
+@@ -579,6 +616,7 @@ extern "C" void SyncThreadContext(CONTEXT* Context) {
+ 
+ NTSTATUS ProcessInit() {
+   InitSyscalls();
++  PatchEarlyLoadedModules();
+ 
+   FEX::Windows::InitCRTProcess();
+   const auto ExecutableName = FEX::Windows::BaseName(FEX::Windows::GetExecutableFilePath());
+@@ -939,6 +977,7 @@ NTSTATUS ThreadInit() {
  
    FEX::Windows::CallRetStack::InitializeThread(Thread);
    Thread->CurrentFrame->Pointers.ExitFunctionEC = reinterpret_cast<uintptr_t>(&ExitFunctionEC);
@@ -319,3 +390,27 @@ index 6ceecd8..d982a13 100644
    CPUArea.StateFrame() = Thread->CurrentFrame;
  
    uint64_t EnterEC = Thread->CurrentFrame->Pointers.DispatcherLoopTopEnterEC;
+diff --git a/Source/Windows/Common/CRT/Alloc.cpp b/Source/Windows/Common/CRT/Alloc.cpp
+index 3d5f60d..0e11be2 100644
+--- a/Source/Windows/Common/CRT/Alloc.cpp
++++ b/Source/Windows/Common/CRT/Alloc.cpp
+@@ -2,6 +2,7 @@
+ #define _SECIMP
+ #define _CRTIMP
+ #include <cstdint>
++#include <cstdlib>
+ #include "../Priv.h"
+ #include <rpmalloc/rpmalloc.h>
+ 
+diff --git a/Source/Windows/Common/CRT/IO.cpp b/Source/Windows/Common/CRT/IO.cpp
+index 0f4704a..c90f695 100644
+--- a/Source/Windows/Common/CRT/IO.cpp
++++ b/Source/Windows/Common/CRT/IO.cpp
+@@ -8,6 +8,7 @@ struct FILE;
+ #include <vector>
+ #include <mutex>
+ #include <algorithm>
++#include <cstdarg>
+ #include <cstdlib>
+ #include <cstdio>
+ #include <cstdint>
