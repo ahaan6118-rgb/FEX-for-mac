@@ -261,20 +261,22 @@ index dfd1f22..c1db577 100644
  #endif
  
 diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
-index 7c64dd8..1af9e56 100644
+index 7c64dd8..6cb53ba 100644
 --- a/FEXCore/include/FEXCore/Core/CoreState.h
 +++ b/FEXCore/include/FEXCore/Core/CoreState.h
-@@ -430,6 +430,8 @@ struct CpuStateFrame {
+@@ -430,6 +430,10 @@ struct CpuStateFrame {
  #ifdef ARCHITECTURE_arm64ec
    // Set by the kernel on ARM64EC whenever the JIT should cooperatively suspend running guest code.
    uint32_t SuspendDoorbell {};
 +  // VKMT: Darwin scrubs x18, so the TEB is cached here. x28 is the TEB in host/Wine code and STATE in JIT code.
 +  uint64_t TEB {};
++  // VKMT: real resume address for ResumeJIT (see Source/Windows/ARM64EC/Module.S)
++  uint64_t ResumePC {};
  #endif
  
    // Pointers that the JIT needs to load to remove relocations
 diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
-index 4c18172..6e7d9be 100644
+index 4c18172..d3961c5 100644
 --- a/Source/Windows/ARM64EC/Module.S
 +++ b/Source/Windows/ARM64EC/Module.S
 @@ -16,7 +16,7 @@ RetToEntryThunk:
@@ -295,7 +297,7 @@ index 4c18172..6e7d9be 100644
    mov w16, #1
    strb w16, [x17, #0x0] // ChpeV2CpuAreaInfo->InSimulation
    ldr x16, [x17, #0x40] // ChpeV2CpuAreaInfo->EmulatorData[2] - DispatcherLoopTopEnterEC
-@@ -41,12 +41,12 @@ enter_jit:
+@@ -41,16 +41,26 @@ enter_jit:
    // Invoked by KiUserEmulationDispatcher after e.g. an NtContinue to x86 code
  .global BeginSimulation
  BeginSimulation:
@@ -310,7 +312,21 @@ index 4c18172..6e7d9be 100644
    ldr x16, [x17, #0x48] // ChpeV2CpuAreaInfo->EmulatorData[3] - DispatcherLoopTopEnterECFillSRA
    mov x11, #0 // Zero ENTRY_FILL_SRA_SINGLE_INST_REG to avoid single step
    br x16 // DispatcherLoopTopEnterECFillSRA(SingleInst:x10, CPUArea:x17)
-@@ -59,7 +59,7 @@ ExitFunctionEC:
+ 
++  // VKMT: Wine on macOS always resumes (NtContinue) with x28 = TEB, but JIT code and the dispatcher expect x28 = STATE.
++  // Resumes into those go through here: x28 = TEB on entry, the real target is in CpuStateFrame::ResumePC (0x5f8, checked by
++  // a static_assert in Module.cpp). x18 is scratch: JIT code never uses it and Darwin scrubs it anyway.
++.global ResumeJIT
++ResumeJIT:
++  ldr x28, [x28, #0x1788] // TEB->ChpeV2CpuAreaInfo
++  ldr x28, [x28, #0x30] // ChpeV2CpuAreaInfo->EmulatorData[0] - thread state
++  ldr x18, [x28, #0x5f8] // CpuStateFrame::ResumePC
++  br x18
++
+   // Called into by FEXCore
+   // Expects the target code address in x9
+ .global ExitFunctionEC
+@@ -59,7 +69,7 @@ ExitFunctionEC:
    mrs x17, fpcr
    and x17, x17, #~6 // NEP + AH
    msr fpcr, x17
@@ -320,20 +336,21 @@ index 4c18172..6e7d9be 100644
    ldr x17, [x17, #0x20] // ChpeV2CpuAreaInfo->SuspendDoorbell
    ldr w17, [x17]
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 6ceecd8..1e776a7 100644
+index 6ceecd8..d2b7b33 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
-@@ -70,6 +70,9 @@ extern IMAGE_DOS_HEADER __ImageBase; // Provided by the linker
+@@ -70,6 +70,10 @@ extern IMAGE_DOS_HEADER __ImageBase; // Provided by the linker
  
  extern void* ExitFunctionEC;
  extern void* CheckCall;
 +extern void* ExitToX64;
 +extern void* DispatchJump;
 +extern void* RetToEntryThunk;
++extern void* ResumeJIT;
  extern void* ExitFunctionSuspendPoint;
  extern void* ExitFunctionSuspendResumePoint;
  
-@@ -217,6 +220,40 @@ void PatchCallChecker() {
+@@ -217,6 +221,40 @@ void PatchCallChecker() {
    WriteModuleRVA(Module, CHPEMetadata->__os_arm64x_dispatch_icall_cfg, &CheckCall);
  }
  
@@ -374,7 +391,7 @@ index 6ceecd8..1e776a7 100644
  // Fills in the syscall numbers necessary to call *Native variants of syscalls from FEX under wine.
  void ParseWineSyscallNumbers(HMODULE NtDll) {
    ULONG Size;
-@@ -579,6 +616,7 @@ extern "C" void SyncThreadContext(CONTEXT* Context) {
+@@ -579,6 +617,7 @@ extern "C" void SyncThreadContext(CONTEXT* Context) {
  
  NTSTATUS ProcessInit() {
    InitSyscalls();
@@ -382,7 +399,44 @@ index 6ceecd8..1e776a7 100644
  
    FEX::Windows::InitCRTProcess();
    const auto ExecutableName = FEX::Windows::BaseName(FEX::Windows::GetExecutableFilePath());
-@@ -939,6 +977,7 @@ NTSTATUS ThreadInit() {
+@@ -743,6 +782,18 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+   }
+ }
+ 
++// VKMT: NtContinue on macOS leaves x28 = TEB. If the context resumes JIT code or the dispatcher, bounce through ResumeJIT to reload STATE.
++static_assert(offsetof(FEXCore::Core::CpuStateFrame, ResumePC) == 0x5f8, "update ResumeJIT in Module.S");
++
++void ContinueNative(ARM64_NT_CONTEXT* NativeContext) {
++  const auto Thread = GetCPUArea().ThreadState();
++  if (Thread && (CTX->IsAddressInCodeBuffer(Thread, NativeContext->Pc) || IsDispatcherAddress(NativeContext->Pc))) {
++    Thread->CurrentFrame->ResumePC = NativeContext->Pc;
++    NativeContext->Pc = reinterpret_cast<uint64_t>(&ResumeJIT);
++  }
++  NtContinueNative(NativeContext, false);
++}
++
+ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestContext, ARM64_NT_CONTEXT* NativeContext) {
+   bool Cont {};
+   if (Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+@@ -754,7 +805,7 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
+         Cont = OvercommitTracker->HandleAccessViolation(FaultAddress);
+       }
+       if (Cont) {
+-        NtContinueNative(NativeContext, false);
++        ContinueNative(NativeContext);
+       }
+     }
+   }
+@@ -770,7 +821,7 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
+   }
+ 
+   if (Cont) {
+-    NtContinueNative(NativeContext, false);
++    ContinueNative(NativeContext);
+   }
+ 
+   CPUArea.Area->InSimulation = false;
+@@ -939,6 +990,7 @@ NTSTATUS ThreadInit() {
  
    FEX::Windows::CallRetStack::InitializeThread(Thread);
    Thread->CurrentFrame->Pointers.ExitFunctionEC = reinterpret_cast<uintptr_t>(&ExitFunctionEC);
