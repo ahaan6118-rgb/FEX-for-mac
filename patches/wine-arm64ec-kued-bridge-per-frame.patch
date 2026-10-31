@@ -1,0 +1,23 @@
+--- a/dlls/ntdll/signal_arm64ec.c	2026-10-31 14:36:23
++++ b/dlls/ntdll/signal_arm64ec.c	2026-10-31 14:40:43
+@@ -1035,8 +1035,10 @@
+ static NTSTATUS virtual_unwind( ULONG type, DISPATCHER_CONTEXT_ARM64EC *dispatch,
+                                 ARM64EC_NT_CONTEXT *context )
+ {
+-    struct vkmt_x64_context_prefix *vkmt_ctx = get_arm64ec_cpu_area()->EmulatorData[0];
+-    ARM64EC_NT_CONTEXT *exception_dispatch_context = vkmt_ctx ? vkmt_ctx->exception_dispatch_context : NULL;
++    /* VKMT: when the frame being unwound is KiUserExceptionDispatcher, its emulated-fault context is the ARM64EC_NT_CONTEXT
++     * at its own sp (see KiUserExceptionDispatcher). Reading it from the frame, rather than from a per-thread slot, keeps
++     * nested exceptions apart; a shared slot made the unwinder jump back to the inner context forever. */
++    ARM64EC_NT_CONTEXT *exception_dispatch_context = (ARM64EC_NT_CONTEXT *)context->Sp;
+     ULONG_PTR exception_dispatch_base;
+     RUNTIME_FUNCTION *exception_dispatch_function;
+     DISPATCHER_CONTEXT_NONVOLREG_ARM64 *nonvol_regs;
+@@ -1325,7 +1327,6 @@
+     if (rec->ExceptionCode == STATUS_EMULATION_SYSCALL) dispatch_syscall( arm_ctx );
+     context_arm_to_x64( context, arm_ctx );
+     if (pResetToConsistentState) pResetToConsistentState( rec, &context->AMD64_Context, arm_ctx );
+-    ((struct vkmt_x64_context_prefix *)get_arm64ec_cpu_area()->EmulatorData[0])->exception_dispatch_context = context;
+     /* call x64 dispatcher if the thunk or the function pointer was modified */
+     if (pWow64PrepareForException || memcmp( KiUserExceptionDispatcher_thunk, KiUserExceptionDispatcher_orig,
+                                              sizeof(KiUserExceptionDispatcher_orig) ))
