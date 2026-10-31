@@ -107,6 +107,10 @@ The first time you are notified in writing that you have violated any of these t
 
 ***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
 
+## Additional Condition: No Contributions to FEX-Emu
+
+Parts of this software, including the modifications to FEX in `patches/` and `FEX-2607/`, were written with AI assistance. The FEX-Emu project does not accept AI-generated code. As a condition of the licenses above, you may not submit this software, or any part of it, as a pull request, patch or other contribution to the FEX-Emu project (https://github.com/FEX-Emu/FEX) or its developers, and you may not ask them for support for it. FEX itself remains under its own MIT license.
+
 ## Definitions
 
 The **licensor** is the individual or entity offering these terms, and the **software** is the software the licensor makes available under these terms.
