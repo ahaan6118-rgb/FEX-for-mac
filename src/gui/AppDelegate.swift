@@ -1037,14 +1037,52 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return UInt16(hdr[24]) | UInt16(hdr[25]) << 8 == 0x20B
     }
 
+    /// Installs the bundled 64-bit emulator (FEX ARM64EC) into the prefix and registers it with Wine. Only done for
+    /// 64-bit programs, so 32-bit use is untouched. Returns false if the bundle has no emulator or setup failed.
+    func ensure64BitEmulator(wineDir: String, env: [String: String]) -> Bool {
+        let bundled = Bundle.main.bundlePath + "/Contents/Resources/fex64/libarm64ecfex.dll"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: bundled) else { return false }
+        let installed = Self.prefixDir + "/drive_c/windows/system32/libarm64ecfex.dll"
+        let marker = Self.prefixDir + "/.fex64-registered"
+        let bundledSize = (try? fm.attributesOfItem(atPath: bundled)[.size] as? UInt64) ?? 0
+        let bundledDate = (try? fm.attributesOfItem(atPath: bundled)[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let stamp = "\(bundledSize):\(Int(bundledDate))"
+        if fm.fileExists(atPath: installed), (try? String(contentsOfFile: marker, encoding: .utf8)) == stamp { return true }
+
+        appendInfo("Setting up the 64-bit emulator (first 64-bit run)...\n")
+        try? fm.removeItem(atPath: installed)
+        do { try fm.copyItem(atPath: bundled, toPath: installed) } catch {
+            appendError("Could not install the 64-bit emulator: \(error.localizedDescription)\n")
+            return false
+        }
+        let reg = Process()
+        reg.executableURL = URL(fileURLWithPath: wineDir + "/bin/wine")
+        reg.arguments = ["reg", "add", "HKLM\\Software\\Microsoft\\Wow64\\amd64", "/ve", "/d", "libarm64ecfex.dll", "/f"]
+        var regEnv = env
+        regEnv["WINEDEBUG"] = "-all"
+        reg.environment = regEnv
+        reg.standardOutput = FileHandle.nullDevice
+        reg.standardError = FileHandle.nullDevice
+        do { try reg.run(); reg.waitUntilExit() } catch { return false }
+        guard reg.terminationStatus == 0 else { return false }
+        try? stamp.write(toFile: marker, atomically: true, encoding: .utf8)
+        return true
+    }
+
     func executeWine(exePath: String) {
-        if isPE64(path: exePath) {
-            appendError("\n64-bit programs aren't supported yet.\n")
-            appendInfo("This app currently runs 32-bit Windows programs only. 64-bit support is in development.\n")
-            DispatchQueue.main.async { [weak self] in
-                self?.markStopped(status: "Unsupported (64-bit)", color: .systemRed)
+        let is64 = isPE64(path: exePath)
+        if is64 {
+            let (_, wineDir, baseEnv) = makeWineEnv()
+            let ready = initWinePrefix(wineDir: wineDir, env: baseEnv) && ensure64BitEmulator(wineDir: wineDir, env: baseEnv)
+            if !ready {
+                appendError("\n64-bit programs aren't supported in this build (emulator missing).\n")
+                DispatchQueue.main.async { [weak self] in
+                    self?.markStopped(status: "Unsupported (64-bit)", color: .systemRed)
+                }
+                return
             }
-            return
+            appendInfo("64-bit program: running with the experimental 64-bit emulator (early, expect bugs).\n")
         }
         appendInfo("Pipeline: PE \u{2192} Wine WoW64 \u{2192} FEXCore JIT \u{2192} ARM64 + DXMT Metal\n\n")
         let (_, wineDir, baseEnv) = makeWineEnv()
