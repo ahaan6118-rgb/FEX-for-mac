@@ -1,0 +1,4 @@
+10396c10396
+<     register struct _TEB *__mingw_current_teb __asm__("x18");
+---
+>     register struct _TEB *__mingw_current_teb __asm__("x28"); /* VKMT: Darwin scrubs x18 */
