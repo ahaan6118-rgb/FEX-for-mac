@@ -1,0 +1,29 @@
+--- a/include/wine/asm.h	2026-10-31 15:12:06
++++ b/include/wine/asm.h	2026-10-31 15:12:06
+@@ -275,8 +275,9 @@
+                        ".byte 0x4c,0x8b,0xd1\n\t" /* 00: movq %rcx,%r10 */ \
+                        ".byte 0xb8\n\t"           /* 03: movl $i,%eax */ \
+                        ".long (" #id ")\n\t"                            \
+-                       ".byte 0xf6,0x04,0x25,0x08,0x03,0xfe,0x7f,0x01\n\t" /* 08: testb $1,0x7ffe0308 */ \
+-                       ".byte 0x75,0x03\n\t"      /* 10: jne 15 */ \
++                       /* VKMT: macOS arm64 cannot map KUSER_SHARED_DATA at 0x7ffe0000, so do not read it: always use syscall */ \
++                       ".byte 0x0f,0x1f,0x84,0x00,0x00,0x00,0x00,0x00\n\t" /* 08: nopl 0(%rax,%rax) */ \
++                       ".byte 0x66,0x90\n\t"      /* 10: nop */ \
+                        ".byte 0x0f,0x05\n\t"      /* 12: syscall */ \
+                        ".byte 0xc3\n\t"           /* 14: ret */ \
+                        ".byte 0xcd,0x2e\n\t"      /* 15: int $0x2e */ \
+--- a/dlls/ntdll/signal_arm64ec.c	2026-10-31 15:12:06
++++ b/dlls/ntdll/signal_arm64ec.c	2026-10-31 15:12:06
+@@ -1999,9 +1999,9 @@
+          ".Lsyscall_seq:\n\t"
+          ".byte 0x4c, 0x8b, 0xd1\n\t"       /* mov  %rcx,%r10 */
+          ".byte 0xb8, 0, 0, 0, 0\n\t"       /* mov  $xxx,%eax */
+-         ".byte 0xf6, 0x04, 0x25, 0x08\n\t" /* testb $0x1,0x7ffe0308 */
+-         ".byte 0x03, 0xfe, 0x7f, 0x01\n\t"
+-         ".byte 0x75, 0x03\n\t"             /* jne 1f */
++         ".byte 0x0f, 0x1f, 0x84, 0x00\n\t" /* VKMT: no KUSER_SHARED_DATA read (unmappable at 0x7ffe0000 on macOS arm64) */
++         ".byte 0x00, 0x00, 0x00, 0x00\n\t" /* nopl 0(%rax,%rax) */
++         ".byte 0x66, 0x90\n\t"             /* nop */
+          ".byte 0x0f, 0x05\n\t"             /* syscall */
+          ".byte 0xc3\n\t"                   /* ret */
+          ".byte 0xcd, 0x2e\n\t"             /* 1: int $0x2e */
