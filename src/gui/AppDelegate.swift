@@ -995,7 +995,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// True for a 64-bit PE image (optional header magic 0x20b, PE32+).
+    func isPE64(path: String) -> Bool {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? fh.close() }
+        guard let dos = try? fh.read(upToCount: 0x40), dos.count == 0x40,
+              dos[0] == 0x4D, dos[1] == 0x5A else { return false }
+        let peOffset = UInt64(dos[0x3C]) | UInt64(dos[0x3D]) << 8 | UInt64(dos[0x3E]) << 16 | UInt64(dos[0x3F]) << 24
+        guard (try? fh.seek(toOffset: peOffset)) != nil,
+              let hdr = try? fh.read(upToCount: 26), hdr.count == 26,
+              hdr[0] == 0x50, hdr[1] == 0x45, hdr[2] == 0, hdr[3] == 0 else { return false }
+        return UInt16(hdr[24]) | UInt16(hdr[25]) << 8 == 0x20B
+    }
+
     func executeWine(exePath: String) {
+        if isPE64(path: exePath) {
+            appendError("\n64-bit programs aren't supported yet.\n")
+            appendInfo("This app currently runs 32-bit Windows programs only. 64-bit support is in development.\n")
+            DispatchQueue.main.async { [weak self] in
+                self?.markStopped(status: "Unsupported (64-bit)", color: .systemRed)
+            }
+            return
+        }
         appendInfo("Pipeline: PE \u{2192} Wine WoW64 \u{2192} FEXCore JIT \u{2192} ARM64 + DXMT Metal\n\n")
         let (_, wineDir, baseEnv) = makeWineEnv()
 
