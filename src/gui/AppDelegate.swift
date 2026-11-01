@@ -31,6 +31,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenuBar()
         setupWindow()
 
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let killed = self?.killStrayWineProcesses() ?? 0
+            if killed > 0 {
+                self?.appendInfo("Stopped \(killed) leftover Windows process(es) from an earlier session.\n")
+            }
+        }
+
         if let pending = pendingOpenFile {
             pendingOpenFile = nil
             pathField.stringValue = pending
@@ -48,7 +55,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        appendOutput("FEX for Mac v0.5.0 beta (32-bit Windows programs)\n")
+        appendOutput("FEX for Mac v0.7.0 beta\n")
         appendOutput("x86_64/i386 Windows PE \u{2192} ARM64 macOS via Wine WoW64 + FEXCore JIT\n")
         appendOutput("RPG Maker games run natively via mkxp-z + ANGLE Metal\n\n")
         appendOutput("Drop a .exe here, browse with \"Open\", or pick a recent app.\n")
@@ -73,6 +80,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenu.addItem(withTitle: "Clear Recent", action: #selector(clearRecent), keyEquivalent: "")
         fileMenuItem.submenu = fileMenu
         mainMenu.addItem(fileMenuItem)
+
+        let gameMenuItem = NSMenuItem()
+        let gameMenu = NSMenu(title: "Game")
+        gameMenu.addItem(withTitle: "Key Remapping...", action: #selector(keyRemapClicked), keyEquivalent: "k")
+        gameMenuItem.submenu = gameMenu
+        mainMenu.addItem(gameMenuItem)
 
         NSApplication.shared.mainMenu = mainMenu
     }
@@ -691,6 +704,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         pipe.fileHandleForReading.readabilityHandler = nil
         currentProcess = nil
 
+        // The Wine server normally exits a few seconds after the last program; anything still running from this
+        // Wine once it is gone is stuck (such processes have been seen spinning at 100% CPU for days).
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self = self, !self.isRunning else { return }
+            let killed = self.killStrayWineProcesses()
+            if killed > 0 { self.appendInfo("Stopped \(killed) leftover Windows process(es).\n") }
+        }
+
         let exitCode: Int32 = launchFailed ? -1 : process.terminationStatus
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -1134,6 +1155,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         pipe.fileHandleForReading.readabilityHandler = nil
         currentProcess = nil
 
+        // The Wine server normally exits a few seconds after the last program; anything still running from this
+        // Wine once it is gone is stuck (such processes have been seen spinning at 100% CPU for days).
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self = self, !self.isRunning else { return }
+            let killed = self.killStrayWineProcesses()
+            if killed > 0 { self.appendInfo("Stopped \(killed) leftover Windows process(es).\n") }
+        }
+
         let exitCode: Int32 = launchFailed ? -1 : process.terminationStatus
         if exitCode == 0 {
             appendOutput("\nFinished (exit 0)\n")
@@ -1189,6 +1218,129 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let wineDir = Bundle.main.bundlePath + "/Contents/Resources/wine"
         if FileManager.default.fileExists(atPath: wineDir + "/bin/wineserver") {
             killWineserver()
+            let serverDeadline = Date().addingTimeInterval(3)
+            while !bundleWineProcesses().servers.isEmpty, Date() < serverDeadline { Thread.sleep(forTimeInterval: 0.1) }
+            killStrayWineProcesses(minimumAge: 0)
+        }
+    }
+
+    // MARK: - Stray Wine processes
+
+    /// Processes running this app's Wine (matched by executable path): Wine servers and everything else.
+    func bundleWineProcesses() -> (servers: [pid_t], others: [(pid: pid_t, age: TimeInterval)]) {
+        let wineDir = URL(fileURLWithPath: Bundle.main.bundlePath + "/Contents/Resources/wine")
+            .resolvingSymlinksInPath().path + "/"
+        let capacity = Int(proc_listallpids(nil, 0)) + 64
+        var pids = [pid_t](repeating: 0, count: capacity)
+        let count = Int(pids.withUnsafeMutableBytes { proc_listallpids($0.baseAddress, Int32($0.count)) })
+        var servers: [pid_t] = [], others: [(pid: pid_t, age: TimeInterval)] = []
+        var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let now = Date().timeIntervalSince1970
+        for pid in pids.prefix(max(count, 0)) where pid > 0 {
+            guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { continue }
+            let exe = String(cString: path)
+            guard exe.hasPrefix(wineDir) else { continue }
+            if exe.hasSuffix("/wineserver") {
+                servers.append(pid)
+                continue
+            }
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            let age = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size
+                ? now - TimeInterval(info.pbi_start_tvsec) : 0
+            others.append((pid, age))
+        }
+        return (servers, others)
+    }
+
+    /// Kills processes of this app's Wine that outlived their Wine server. While any Wine server from this app is
+    /// running (a game here or from a launcher) nothing is touched; `minimumAge` skips programs that may be
+    /// starting their server right now.
+    @discardableResult
+    func killStrayWineProcesses(minimumAge: TimeInterval = 10) -> Int {
+        let procs = bundleWineProcesses()
+        guard procs.servers.isEmpty else { return 0 }
+        var killed = 0
+        for p in procs.others where p.age >= minimumAge {
+            if kill(p.pid, SIGKILL) == 0 { killed += 1 }
+        }
+        return killed
+    }
+
+    // MARK: - Key remapping
+
+    /// Runs Wine's reg.exe in the app's prefix and returns its output.
+    func runWineReg(_ args: [String]) -> String? {
+        let (_, wineDir, env) = makeWineEnv()
+        guard initWinePrefix(wineDir: wineDir, env: env) else { return nil }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: wineDir + "/bin/wine")
+        proc.arguments = ["reg"] + args
+        proc.environment = env
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        return String(data: data, encoding: .utf8)
+    }
+
+    @objc func keyRemapClicked() {
+        let path = pathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard path.lowercased().hasSuffix(".exe") else {
+            appendError("Pick a game first (Open .exe or a recent app), then choose Key Remapping.\n")
+            return
+        }
+        let exeName = URL(fileURLWithPath: path).lastPathComponent
+        let gameDir = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        if detectRPGMaker(gameDir: gameDir) != nil {
+            let alert = NSAlert()
+            alert.messageText = "Key Remapping"
+            alert.informativeText = "\(exeName) is an RPG Maker game, which runs natively. Press F1 (fn+F1) in the game to change its keys."
+            alert.runModal()
+            return
+        }
+        // Wine's Mac driver reads KeyRemap from HKCU\Software\Wine\AppDefaults\<exe>\Mac Driver when the game starts.
+        let key = "HKCU\\Software\\Wine\\AppDefaults\\\(exeName)\\Mac Driver"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let output = self?.runWineReg(["query", key, "/v", "KeyRemap"]) ?? ""
+            let current = output.components(separatedBy: "\n")
+                .first { $0.contains("KeyRemap") }?
+                .components(separatedBy: "REG_SZ").last?
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            DispatchQueue.main.async { self?.showKeyRemapDialog(exeName: exeName, key: key, current: current) }
+        }
+    }
+
+    func showKeyRemapDialog(exeName: String, key: String, current: String) {
+        let alert = NSAlert()
+        alert.messageText = "Key Remapping for \(exeName)"
+        alert.informativeText = """
+            Pressing the key on the left acts as the key on the right, e.g. "Space=Shift, Z=J". \
+            Keys: A-Z, 0-9, F1-F12, Space, Return, Tab, Escape, Backspace, Delete, Up, Down, Left, Right, \
+            Shift, Control, Option, Command, RightShift, RightControl, RightOption, Home, End, PageUp, PageDown, \
+            Minus, Equal, Comma, Period, Slash, Semicolon, Quote, Grave. Leave empty to remove. \
+            Takes effect the next time the game starts.
+            """
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.stringValue = current
+        field.placeholderString = "Space=Shift, Z=J"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let value = field.stringValue.trimmingCharacters(in: .whitespaces)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let args = value.isEmpty ? ["delete", key, "/v", "KeyRemap", "/f"]
+                                     : ["add", key, "/v", "KeyRemap", "/t", "REG_SZ", "/d", value, "/f"]
+            if self?.runWineReg(args) != nil {
+                self?.appendInfo(value.isEmpty ? "Key remapping removed for \(exeName).\n"
+                                               : "Key remapping for \(exeName): \(value)\n")
+            } else {
+                self?.appendError("Couldn't save the key remapping.\n")
+            }
         }
     }
 }

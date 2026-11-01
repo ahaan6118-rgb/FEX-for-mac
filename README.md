@@ -1,4 +1,4 @@
-# FEX for Mac — beta (0.6.0)
+# FEX for Mac — beta (0.7.0)
 
 Run Windows programs and games on Apple silicon Macs **without Rosetta 2**.
 
@@ -23,7 +23,7 @@ Tested on an M1 Mac, macOS 26.
 | Works (tested) | Notes |
 |---|---|
 | 32-bit Windows programs | Drag a `.exe` onto the app, or File → Open |
-| A 32-bit DirectX 8 game (GameMaker 8 + FMOD) | Draws, plays, audio works. Higher CPU than a native PC (it is translating x86) |
+| A 32-bit DirectX 8 game (GameMaker 8 + FMOD) | Draws, plays, audio works, full 50 fps. Uses about 0.75 of a CPU core on an M1 (it is translating x86) |
 | Steam (the last Windows-8-era 32-bit client) | Logs in, library loads. Valve has ended support for this client — see below |
 | RPG Maker XP/VX/VX Ace games | Native `mkxp-z`; smoke-tested (starts, ANGLE-on-Metal renders) |
 
@@ -43,6 +43,13 @@ Tested on an M1 Mac, macOS 26.
    steampowered.com — it is not included). The app installs Steam and starts it with the right
    settings. Afterwards just click the **Steam** button. Use **Stop** (not force-quit) so Steam can
    save your login.
+
+**Key remapping:** pick the game (Open… or a recent app), then **Game → Key Remapping…** (⌘K) and enter
+pairs like `Space=Shift, Z=J` — pressing the key on the left acts as the key on the right, only in that game,
+from its next start. RPG Maker games run natively instead: press F1 (fn+F1) in the game to change their keys.
+
+When a program exits, the app also stops any of its Windows processes that are left running without a
+Wine server (these used to keep spinning in the background).
 
 Per-program settings live in `FEXforMac.app/Contents/Resources/profiles/*.profile` (plain text; the
 runner `Resources/bin/fex-run` applies them). Logs: `~/Library/Logs/FEXforMac.log`.
@@ -67,6 +74,8 @@ swiftc -parse-as-library -o FEXforMac.app/Contents/MacOS/FEXforMac \
 scripts/install-runner.sh FEXforMac.app
 ```
 
+- `scripts/build-fex.sh [wow64|arm64ec|all] [--install]` builds both FEX emulators (32-bit `xtajit.dll` and
+  64-bit `libarm64ecfex.dll`) from one FEX tree.
 - `scripts/assemble-vkmt-bundle.sh` assembles the Wine + FEX bundle.
 - `scripts/make-launcher.sh "Name" 'C:\path\prog.exe'` builds a one-click launcher app for one program.
 - mkxp-z: see [mkxp-z-patches/README.md](mkxp-z-patches/README.md).

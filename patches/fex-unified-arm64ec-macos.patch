@@ -1,0 +1,588 @@
+diff --git a/FEXCore/Source/Common/StringConv.h b/FEXCore/Source/Common/StringConv.h
+index e4b2dad..b45cc11 100644
+--- a/FEXCore/Source/Common/StringConv.h
++++ b/FEXCore/Source/Common/StringConv.h
+@@ -3,6 +3,7 @@
+ #include <FEXCore/fextl/string.h>
+ 
+ #include <concepts>
++#include <cstdlib>
+ #include <string_view>
+ 
+ namespace FEXCore::StrConv {
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+index 708510e..1576f91 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+@@ -887,17 +887,17 @@ void Arm64Emitter::FillStaticRegs(FillStaticRegOptions Options) {
+   auto TmpReg2 = *Options.OptionalReg2;
+ 
+ #ifdef ARCHITECTURE_arm64ec
+-  // Load STATE in from the CPU area as x28 is not callee saved in the ARM64EC ABI.
+ #ifdef FEX_IOS_HOST
++  // Load STATE in from the CPU area as x28 is not callee saved in the ARM64EC ABI.
+   // iOS clobbers x18 — read TEB from TPIDRRO_EL0+TSD slot 275 instead.
+   mrs(TmpReg.X(), ARMEmitter::SystemRegister::TPIDRRO_EL0);
+   and_(ARMEmitter::Size::i64Bit, TmpReg.X(), TmpReg.X(), ~7ULL);
+   ldr(TmpReg.X(), TmpReg.X(), IosTebTsdOffset);
+   ldr(TmpReg.X(), TmpReg.X(), TEB_CPU_AREA_OFFSET);
++  ldr(STATE, TmpReg, CPU_AREA_EMULATOR_DATA_OFFSET);
+ #else
+-  ldr(TmpReg.X(), ARMEmitter::Reg::r18, TEB_CPU_AREA_OFFSET);
++  // VKMT: STATE was already reloaded by BlrHost/SwitchToJITState (x28 is the TEB across host calls here).
+ #endif
+-  ldr(STATE, TmpReg, CPU_AREA_EMULATOR_DATA_OFFSET);
+ #endif
+ 
+   if (CallRetStackUsed()) {
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+index 6fc4386..672ee3b 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+@@ -2,6 +2,7 @@
+ #pragma once
+ 
+ #include <FEXCore/Config/Config.h>
++#include <FEXCore/Core/CoreState.h>
+ 
+ #ifdef VIXL_DISASSEMBLER
+ #include <aarch64/disasm-aarch64.h>
+@@ -275,6 +276,31 @@ protected:
+     FillStaticRegs({});
+   }
+ 
++#ifdef ARCHITECTURE_arm64ec
++  // VKMT: Darwin scrubs x18, so ARM64EC JIT code cannot read the TEB from it. x28 is STATE in JIT code but must hold the
++  // TEB in host/Wine code, so it is switched around host calls and the TEB is cached in the thread state.
++  void LoadTEB(ARMEmitter::Register Dst) {
++    ldr(Dst.X(), STATE, offsetof(FEXCore::Core::CpuStateFrame, TEB));
++  }
++  void SwitchToHostTEB() {
++    ldr(STATE, STATE, offsetof(FEXCore::Core::CpuStateFrame, TEB));
++  }
++  void SwitchToJITState() {
++    // x28 is the TEB again after the host call returned
++    ldr(TMP1, STATE, TEB_CPU_AREA_OFFSET);
++    ldr(STATE, TMP1, CPU_AREA_EMULATOR_DATA_OFFSET);
++  }
++  void BlrHost(ARMEmitter::Register Reg) {
++    SwitchToHostTEB();
++    blr(Reg);
++    SwitchToJITState();
++  }
++#else
++  void BlrHost(ARMEmitter::Register Reg) {
++    blr(Reg);
++  }
++#endif
++
+   // Register 0-18 + 29 + 30 are caller saved
+   static constexpr uint32_t CALLER_GPR_MASK = 0b0110'0000'0000'0111'1111'1111'1111'1111U;
+ 
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index 21eadbe..57294c3 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -263,7 +263,8 @@ void Dispatcher::EmitDispatcher() {
+     ldr(TMP1, TMP1, PEB_EC_CODE_BITMAP_OFFSET);
+   }
+ #else
+-  ldr(TMP1, ARMEmitter::XReg::x18, TEB_PEB_OFFSET);
++  LoadTEB(TMP1);
++  ldr(TMP1, TMP1, TEB_PEB_OFFSET);
+   ldr(TMP1, TMP1, PEB_EC_CODE_BITMAP_OFFSET);
+ #endif
+ 
+@@ -280,6 +281,7 @@ void Dispatcher::EmitDispatcher() {
+   add(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::rsp, StaticRegisters[X86State::REG_RSP], 0);
+   mov(EC_CALL_CHECKER_PC_REG, RipReg);
+   ldr(TMP2, STATE_PTR(CpuStateFrame, Pointers.ExitFunctionEC));
++  SwitchToHostTEB();
+   br(TMP2);
+ 
+   (void)Bind(&l_NotECCode);
+@@ -411,7 +413,8 @@ void Dispatcher::EmitDispatcher() {
+     ldr(TMP2, TMP2, IosTebTsdOffset);
+     ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
+ #else
+-    ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
++    LoadTEB(TMP2);
++    ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
+ #endif
+     LoadConstant(ARMEmitter::Size::i32Bit, TMP1, 1);
+     strb(TMP1.W(), TMP2, CPU_AREA_IN_SYSCALL_CALLBACK_OFFSET);
+@@ -426,7 +429,8 @@ void Dispatcher::EmitDispatcher() {
+     ldr(TMP2, TMP2, IosTebTsdOffset);
+     ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
+ #else
+-    ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
++    LoadTEB(TMP2);
++    ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
+ #endif
+     strb(ARMEmitter::WReg::zr, TMP2, CPU_AREA_IN_SYSCALL_CALLBACK_OFFSET);
+ #endif
+@@ -454,7 +458,7 @@ void Dispatcher::EmitDispatcher() {
+       if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+         GenerateIndirectRuntimeCall<uintptr_t, void*, void*>(ARMEmitter::Reg::r2);
+       } else {
+-        blr(ARMEmitter::Reg::r2);
++        BlrHost(ARMEmitter::Reg::r2);
+       }
+ 
+       if (!TMP_ABIARGS) {
+@@ -487,7 +491,7 @@ void Dispatcher::EmitDispatcher() {
+       if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+         GenerateIndirectRuntimeCall<uintptr_t, void*, void*, uint64_t, uint64_t>(ARMEmitter::Reg::r4);
+       } else {
+-        blr(ARMEmitter::Reg::r4); // { CTX, Frame, RIP, MaxInst }
++        BlrHost(ARMEmitter::Reg::r4); // { CTX, Frame, RIP, MaxInst }
+       }
+ 
+       // Result is now in x0
+@@ -520,7 +524,7 @@ void Dispatcher::EmitDispatcher() {
+       if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+         GenerateIndirectRuntimeCall<uintptr_t, void*, void*, uint64_t, uint64_t>(ARMEmitter::Reg::r4);
+       } else {
+-        blr(ARMEmitter::Reg::r4); // { CTX, Frame, RIP }
++        BlrHost(ARMEmitter::Reg::r4); // { CTX, Frame, RIP }
+       }
+ 
+       // Result is now in x0
+@@ -608,7 +612,7 @@ void Dispatcher::EmitDispatcher() {
+     if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+       GenerateIndirectRuntimeCall<void, void*, void*>(ARMEmitter::Reg::r2);
+     } else {
+-      blr(ARMEmitter::Reg::r2);
++      BlrHost(ARMEmitter::Reg::r2);
+     }
+ 
+     PauseReturnInstruction = GetCursorAddress<uint64_t>();
+@@ -777,7 +781,7 @@ void Dispatcher::EmitDispatcher() {
+     if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+       GenerateIndirectRuntimeCall<__uint128_t, uint64_t, uint64_t, uint64_t>(ARMEmitter::Reg::r3);
+     } else {
+-      blr(ARMEmitter::Reg::r3);
++      BlrHost(ARMEmitter::Reg::r3);
+     }
+ 
+     // Result is now in x0, x1
+diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+index 38d0b2c..9c38d07 100644
+--- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+@@ -127,6 +127,7 @@ DEF_OP(ExitFunction) {
+         br(TMP2);
+       }
+ #else
++      SwitchToHostTEB();
+       br(TMP2);
+ #endif
+     } else {
+@@ -512,7 +513,7 @@ DEF_OP(Syscall) {
+   if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+     GenerateIndirectRuntimeCall<uint64_t, void*, void*, void*>(ARMEmitter::Reg::r3);
+   } else {
+-    blr(ARMEmitter::Reg::r3);
++    BlrHost(ARMEmitter::Reg::r3);
+   }
+ 
+   add(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::rsp, ARMEmitter::Reg::rsp, SPOffset);
+@@ -560,7 +561,7 @@ DEF_OP(Thunk) {
+   if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+     GenerateIndirectRuntimeCall<void, void*, void*>(ARMEmitter::Reg::r2);
+   } else {
+-    blr(ARMEmitter::Reg::r2);
++    BlrHost(ARMEmitter::Reg::r2);
+   }
+ 
+   PopDynamicRegs();
+@@ -638,7 +639,7 @@ DEF_OP(ThreadRemoveCodeEntry) {
+   if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+     GenerateIndirectRuntimeCall<void, void*, void*>(ARMEmitter::Reg::r2);
+   } else {
+-    blr(ARMEmitter::Reg::r2);
++    BlrHost(ARMEmitter::Reg::r2);
+   }
+   FillStaticRegs();
+ 
+@@ -670,7 +671,7 @@ DEF_OP(CPUID) {
+   if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+     GenerateIndirectRuntimeCall<__uint128_t, void*, uint64_t, uint64_t>(ARMEmitter::Reg::r3);
+   } else {
+-    blr(ARMEmitter::Reg::r3);
++    BlrHost(ARMEmitter::Reg::r3);
+   }
+ 
+   if (!TMP_ABIARGS) {
+@@ -705,7 +706,7 @@ DEF_OP(XGetBV) {
+   if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+     GenerateIndirectRuntimeCall<uint64_t, void*, uint32_t>(ARMEmitter::Reg::r2);
+   } else {
+-    blr(ARMEmitter::Reg::r2);
++    BlrHost(ARMEmitter::Reg::r2);
+   }
+ 
+   if (!TMP_ABIARGS) {
+diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+index 4bddd9b..3d54c55 100644
+--- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+@@ -208,7 +208,7 @@ DEF_OP(Print) {
+       GenerateIndirectRuntimeCall<void, uint64_t, uint64_t>(ARMEmitter::Reg::r3);
+     }
+   } else {
+-    blr(ARMEmitter::Reg::r3);
++    BlrHost(ARMEmitter::Reg::r3);
+   }
+ 
+   FillStaticRegs();
+@@ -227,7 +227,7 @@ DEF_OP(PrintMsg) {
+   if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+     GenerateIndirectRuntimeCall<void, uint64_t>(ARMEmitter::Reg::r1);
+   } else {
+-    blr(ARMEmitter::Reg::r1);
++    BlrHost(ARMEmitter::Reg::r1);
+   }
+ 
+   FillStaticRegs();
+@@ -346,7 +346,8 @@ DEF_OP(MonoBackpatcherWrite) {
+   ldr(TMP2, TMP2, IosTebTsdOffset);
+   ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
+ #else
+-  ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
++  LoadTEB(TMP2);
++  ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
+ #endif
+   LoadConstant(ARMEmitter::Size::i32Bit, TMP1, 1);
+   strb(TMP1.W(), TMP2, CPU_AREA_IN_SYSCALL_CALLBACK_OFFSET);
+@@ -356,11 +357,12 @@ DEF_OP(MonoBackpatcherWrite) {
+   if (!CTX->Config.DisableVixlIndirectCalls) [[unlikely]] {
+     GenerateIndirectRuntimeCall<void, void*, uint8_t, uint64_t, uint64_t>(ARMEmitter::Reg::r4);
+   } else {
+-    blr(ARMEmitter::Reg::r4);
++    BlrHost(ARMEmitter::Reg::r4);
+   }
+ 
+ #ifdef ARCHITECTURE_arm64ec
+-  ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
++  LoadTEB(TMP2);
++  ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
+   strb(ARMEmitter::WReg::zr, TMP2, CPU_AREA_IN_SYSCALL_CALLBACK_OFFSET);
+ #endif
+ 
+diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
+index cc7ea87..064ed84 100644
+--- a/FEXCore/include/FEXCore/Core/CoreState.h
++++ b/FEXCore/include/FEXCore/Core/CoreState.h
+@@ -434,6 +434,10 @@ struct CpuStateFrame {
+ #ifdef ARCHITECTURE_arm64ec
+   // Set by the kernel on ARM64EC whenever the JIT should cooperatively suspend running guest code.
+   uint32_t SuspendDoorbell {};
++  // VKMT: Darwin scrubs x18, so the TEB is cached here. x28 is the TEB in host/Wine code and STATE in JIT code.
++  uint64_t TEB {};
++  // VKMT: real resume address for ResumeJIT (see Source/Windows/ARM64EC/Module.S)
++  uint64_t ResumePC {};
+ #endif
+ 
+   // Pointers that the JIT needs to load to remove relocations
+diff --git a/Source/Windows/ARM64EC/CMakeLists.txt b/Source/Windows/ARM64EC/CMakeLists.txt
+index c527c28..731c1c5 100644
+--- a/Source/Windows/ARM64EC/CMakeLists.txt
++++ b/Source/Windows/ARM64EC/CMakeLists.txt
+@@ -2,9 +2,16 @@ add_library(arm64ecfex SHARED
+   Module.cpp
+   Module.S
+   IosJitAlias.cpp
+-  libarm64ecfex.def
+   $<TARGET_OBJECTS:FEXCore_object>)
+ 
++# VKMT: the iOS export list names iOS-only entry points and data; desktop macOS exports upstream's list and
++# gets zero/no-op definitions of the iOS globals the shared code references.
++if (FEX_IOS_HOST_BUILD)
++  target_sources(arm64ecfex PRIVATE libarm64ecfex.def)
++else()
++  target_sources(arm64ecfex PRIVATE libarm64ecfex_macos.def ../Common/macos_stubs.cpp)
++endif()
++
+ patch_library_wine(arm64ecfex)
+ 
+ target_include_directories(arm64ecfex PRIVATE
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index 668b1d2..9f72c26 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -72,7 +72,7 @@ check_target_ec:
+   IOS_LOAD_TEB x16
+   ldr x16, [x16, #0x60] // TEB->PEB
+ #else
+-  ldr x16, [x18, #0x60] // TEB->PEB
++  ldr x16, [x28, #0x60] // TEB->PEB
+ #endif
+   ldr x16, [x16, #0x368] // PEB->EcCodeBitMap
+   lsr x17, x9, #18
+@@ -212,7 +212,7 @@ enter_jit:
+   IOS_LOAD_TEB x17
+   ldr x17, [x17, #0x1788] // TEB->ChpeV2CpuAreaInfo
+ #else
+-  ldr x17, [x18, #0x1788] // TEB->ChpeV2CpuAreaInfo
++  ldr x17, [x28, #0x1788] // TEB->ChpeV2CpuAreaInfo
+ #endif
+   mov w16, #1
+   strb w16, [x17, #0x0] // ChpeV2CpuAreaInfo->InSimulation
+@@ -257,7 +257,7 @@ BeginSimulation:
+   b 6b
+ 7:
+ #else
+-  ldr x17, [x18, #0x1788] // TEB->ChpeV2CpuAreaInfo
++  ldr x17, [x28, #0x1788] // TEB->ChpeV2CpuAreaInfo
+ #endif
+   ldr x16, [x17, #0x8] // ChpeV2CpuAreaInfo->EmulatorStackBase
+   mov sp, x16
+@@ -272,12 +272,25 @@ BeginSimulation:
+   IOS_LOAD_TEB x17
+   ldr x17, [x17, #0x1788] // TEB->ChpeV2CpuAreaInfo
+ #else
+-  ldr x17, [x18, #0x1788] // TEB->ChpeV2CpuAreaInfo
++  ldr x17, [x28, #0x1788] // TEB->ChpeV2CpuAreaInfo
+ #endif
+   ldr x16, [x17, #0x48] // ChpeV2CpuAreaInfo->EmulatorData[3] - DispatcherLoopTopEnterECFillSRA
+   mov x11, #0 // Zero ENTRY_FILL_SRA_SINGLE_INST_REG to avoid single step
+   br x16 // DispatcherLoopTopEnterECFillSRA(SingleInst:x10, CPUArea:x17)
+ 
++#ifndef FEX_IOS_HOST
++  // VKMT: Wine on macOS always resumes (NtContinue) with x28 = TEB, but JIT code and the dispatcher expect x28 = STATE.
++  // Resumes into those go through here: x28 = TEB on entry, the real target is in CpuStateFrame::ResumePC (offset checked by
++  // a static_assert in Module.cpp). x18 is scratch: JIT code never uses it and Darwin scrubs it anyway.
++#define VKMT_FRAME_RESUME_PC 0x5f8
++.global ResumeJIT
++ResumeJIT:
++  ldr x28, [x28, #0x1788] // TEB->ChpeV2CpuAreaInfo
++  ldr x28, [x28, #0x30] // ChpeV2CpuAreaInfo->EmulatorData[0] - thread state
++  ldr x18, [x28, #VKMT_FRAME_RESUME_PC] // CpuStateFrame::ResumePC
++  br x18
++#endif
++
+ #ifdef FEX_IOS_HOST
+ // FEXCore::Core::CpuStateFrame offsets read below; ARM64EC/Module.cpp checks them with static_asserts.
+ #define IOS_FRAME_SUSPEND_DOORBELL 1512
+@@ -385,7 +398,7 @@ ExitFunctionEC:
+   IOS_LOAD_TEB x17
+   ldr x17, [x17, #0x1788] // TEB->ChpeV2CpuAreaInfo
+ #else
+-  ldr x17, [x18, #0x1788] // TEB->ChpeV2CpuAreaInfo
++  ldr x17, [x28, #0x1788] // TEB->ChpeV2CpuAreaInfo
+ #endif
+   strb wzr, [x17, #0x0] // ChpeV2CpuAreaInfo->InSimulation
+   ldr x17, [x17, #0x20] // ChpeV2CpuAreaInfo->SuspendDoorbell
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index f79c770..f9865eb 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -121,6 +121,11 @@ static uint32_t IosEcExitLean = 0;
+  * bitmap there. (Kept out of this file's data: another word here shifted a neighbour into a misaligned
+  * adrp/ldr pair at link time.) */
+ extern "C" uint32_t IosRetToJit;
++#else
++// No JIT-pool aliases off iOS: PE code runs at its own address.
++static inline uint64_t IosJitReverseTranslate(uint64_t Addr) {
++  return Addr;
++}
+ #endif // FEX_IOS_HOST
+ 
+ namespace Exception {
+@@ -135,6 +140,10 @@ extern void* ExitFunctionEC;
+ extern void* ExitFunctionECJit;
+ #endif
+ extern void* CheckCall;
++extern void* ExitToX64;
++extern void* DispatchJump;
++extern void* RetToEntryThunk;
++extern void* ResumeJIT;
+ extern void* ExitFunctionSuspendPoint;
+ extern void* ExitFunctionSuspendResumePoint;
+ 
+@@ -374,6 +383,40 @@ void PatchCallChecker() {
+   WriteModuleRVA(Module, CHPEMetadata->__os_arm64x_dispatch_icall_cfg, &CheckCall);
+ }
+ 
++// VKMT: Wine fills each EC module's __os_arm64x_dispatch_{call_no_redirect,fptr,ret} slots with this emulator's entry points when the
++// module is loaded. Modules loaded before the emulator (kernelbase, pulled in by the emulator's own C++ runtime imports) got NULL there,
++// so any of their functions called from x86 code jumped to address 0 on return. Fill those slots in for everything already loaded.
++void PatchEarlyLoadedModules() {
++  const auto Self = reinterpret_cast<uintptr_t>(&__ImageBase);
++  const auto* Ldr = reinterpret_cast<const uint8_t*>(reinterpret_cast<__TEB*>(NtCurrentTeb())->Peb->LdrData);
++  // PEB_LDR_DATA::InMemoryOrderModuleList is at +0x20, LDR_DATA_TABLE_ENTRY::DllBase is 0x20 bytes after InMemoryOrderLinks.
++  const auto* ListHead = reinterpret_cast<const LIST_ENTRY*>(Ldr + 0x20);
++  for (auto* Link = ListHead->Flink; Link != ListHead; Link = Link->Flink) {
++    const auto Module = *reinterpret_cast<HMODULE const*>(reinterpret_cast<const uint8_t*>(Link) + 0x20);
++    if (!Module || reinterpret_cast<uintptr_t>(Module) == Self) {
++      continue;
++    }
++
++    ULONG Size;
++    const auto* LoadConfig =
++      reinterpret_cast<_IMAGE_LOAD_CONFIG_DIRECTORY64*>(RtlImageDirectoryEntryToData(Module, true, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &Size));
++    if (!LoadConfig || Size <= offsetof(_IMAGE_LOAD_CONFIG_DIRECTORY64, CHPEMetadataPointer) || !LoadConfig->CHPEMetadataPointer) {
++      continue;
++    }
++
++    const auto* NtHeaders = RtlImageNtHeader(Module);
++    const auto ModuleBase = reinterpret_cast<uintptr_t>(Module);
++    if (!NtHeaders || LoadConfig->CHPEMetadataPointer <= ModuleBase || LoadConfig->CHPEMetadataPointer >= ModuleBase + NtHeaders->OptionalHeader.SizeOfImage) {
++      continue;
++    }
++
++    const auto* CHPEMetadata = reinterpret_cast<IMAGE_ARM64EC_METADATA*>(LoadConfig->CHPEMetadataPointer);
++    WriteModuleRVA(Module, CHPEMetadata->__os_arm64x_dispatch_call_no_redirect, &ExitToX64);
++    WriteModuleRVA(Module, CHPEMetadata->__os_arm64x_dispatch_fptr, &DispatchJump);
++    WriteModuleRVA(Module, CHPEMetadata->__os_arm64x_dispatch_ret, &RetToEntryThunk);
++  }
++}
++
+ // Fills in the syscall numbers necessary to call *Native variants of syscalls from FEX under wine.
+ void ParseWineSyscallNumbers(HMODULE NtDll) {
+   ULONG Size;
+@@ -963,6 +1006,7 @@ NTSTATUS ProcessInit() {
+ #endif
+ 
+   InitSyscalls();
++  PatchEarlyLoadedModules();
+ 
+   FEX::Windows::InitCRTProcess();
+   const auto ExecutableName = FEX::Windows::BaseName(FEX::Windows::GetExecutableFilePath());
+@@ -1508,6 +1552,18 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+   }
+ }
+ 
++// VKMT: NtContinue on macOS leaves x28 = TEB. If the context resumes JIT code or the dispatcher, bounce through ResumeJIT to reload STATE.
++static_assert(offsetof(FEXCore::Core::CpuStateFrame, ResumePC) == 0x5f8, "update ResumeJIT in Module.S");
++
++void ContinueNative(ARM64_NT_CONTEXT* NativeContext) {
++  const auto Thread = GetCPUArea().ThreadState();
++  if (Thread && (CTX->IsAddressInCodeBuffer(Thread, NativeContext->Pc) || IsDispatcherAddress(NativeContext->Pc))) {
++    Thread->CurrentFrame->ResumePC = NativeContext->Pc;
++    NativeContext->Pc = reinterpret_cast<uint64_t>(&ResumeJIT);
++  }
++  NtContinueNative(NativeContext, false);
++}
++
+ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestContext, ARM64_NT_CONTEXT* NativeContext) {
+   bool Cont {};
+   if (Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+@@ -1519,7 +1575,7 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
+         Cont = OvercommitTracker->HandleAccessViolation(FaultAddress);
+       }
+       if (Cont) {
+-        NtContinueNative(NativeContext, false);
++        ContinueNative(NativeContext);
+       }
+     }
+   }
+@@ -1543,7 +1599,7 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
+   }
+ 
+   if (Cont) {
+-    NtContinueNative(NativeContext, false);
++    ContinueNative(NativeContext);
+   }
+ 
+   CPUArea.Area->InSimulation = false;
+@@ -2106,6 +2162,7 @@ NTSTATUS ThreadInit() {
+ #else
+   Thread->CurrentFrame->Pointers.ExitFunctionEC = reinterpret_cast<uintptr_t>(&ExitFunctionEC);
+ #endif
++  Thread->CurrentFrame->TEB = reinterpret_cast<uint64_t>(NtCurrentTeb());
+   CPUArea.StateFrame() = Thread->CurrentFrame;
+ 
+   uint64_t EnterEC = Thread->CurrentFrame->Pointers.DispatcherLoopTopEnterEC;
+diff --git a/Source/Windows/ARM64EC/libarm64ecfex_macos.def b/Source/Windows/ARM64EC/libarm64ecfex_macos.def
+new file mode 100644
+index 0000000..bb51ca8
+--- /dev/null
++++ b/Source/Windows/ARM64EC/libarm64ecfex_macos.def
+@@ -0,0 +1,23 @@
++LIBRARY libarm64ecfex.dll
++
++EXPORTS
++  BTCpu64FlushInstructionCache
++  BTCpu64IsProcessorFeaturePresent
++  BTCpu64NotifyMemoryDirty
++  BTCpu64NotifyReadFile
++  DispatchJump DATA
++  RetToEntryThunk DATA
++  ExitToX64 DATA
++  BeginSimulation DATA
++  FlushInstructionCacheHeavy
++  NotifyMapViewOfSection
++  NotifyMemoryAlloc
++  NotifyMemoryFree
++  NotifyMemoryProtect
++  NotifyUnmapViewOfSection
++  ProcessInit
++  ProcessTerm
++  ResetToConsistentState
++  ThreadInit
++  ThreadTerm
++  UpdateProcessorInformation
+diff --git a/Source/Windows/Common/CRT/Alloc.cpp b/Source/Windows/Common/CRT/Alloc.cpp
+index 029e2c6..4f5e968 100644
+--- a/Source/Windows/Common/CRT/Alloc.cpp
++++ b/Source/Windows/Common/CRT/Alloc.cpp
+@@ -2,6 +2,7 @@
+ #define _SECIMP
+ #define _CRTIMP
+ #include <cstdint>
++#include <cstdlib>
+ #include "../Priv.h"
+ #include <rpmalloc/rpmalloc.h>
+ 
+diff --git a/Source/Windows/Common/CRT/IO.cpp b/Source/Windows/Common/CRT/IO.cpp
+index 0f4704a..c90f695 100644
+--- a/Source/Windows/Common/CRT/IO.cpp
++++ b/Source/Windows/Common/CRT/IO.cpp
+@@ -8,6 +8,7 @@ struct FILE;
+ #include <vector>
+ #include <mutex>
+ #include <algorithm>
++#include <cstdarg>
+ #include <cstdlib>
+ #include <cstdio>
+ #include <cstdint>
+diff --git a/Source/Windows/WOW64/macos_stubs.cpp b/Source/Windows/Common/macos_stubs.cpp
+similarity index 65%
+rename from Source/Windows/WOW64/macos_stubs.cpp
+rename to Source/Windows/Common/macos_stubs.cpp
+index 33be728..d616258 100644
+--- a/Source/Windows/WOW64/macos_stubs.cpp
++++ b/Source/Windows/Common/macos_stubs.cpp
+@@ -16,6 +16,17 @@ int ios_va_log_len = 0;
+ void IosSweepRegisterThreadEx(FEXCore::Core::InternalThreadState*, volatile uint8_t*, uint64_t*) {}
+ void IosSweepUnregisterThread(FEXCore::Core::InternalThreadState*) {}
+ 
++#ifndef ARCHITECTURE_arm64ec
++// libc++'s locale code in newer llvm-mingw imports these from kernel32, which the WoW64 provider must not load (the
++// 64-bit side of a WoW64 process only has ntdll and the wow64 DLLs). FEX only uses the "C" locale.
++unsigned int __stdcall GetACP() {
++    return 65001; // CP_UTF8
++}
++int __stdcall GetLocaleInfoEx(const wchar_t*, unsigned long, wchar_t*, int) {
++    return 0;
++}
++#endif
++
+ // mingw's ucrt may not export _time64 under all configs
+ __int64 _time64(__int64 *t) {
+     time_t now = time(nullptr);
+diff --git a/Source/Windows/WOW64/CMakeLists.txt b/Source/Windows/WOW64/CMakeLists.txt
+index 782734e..8d26abe 100644
+--- a/Source/Windows/WOW64/CMakeLists.txt
++++ b/Source/Windows/WOW64/CMakeLists.txt
+@@ -3,7 +3,7 @@
+ add_library(wow64fex SHARED
+   Module.cpp
+   IosMonoBridge.cpp
+-  macos_stubs.cpp
++  ../Common/macos_stubs.cpp
+   libwow64fex.def
+   $<TARGET_OBJECTS:FEXCore_object>)
+ 

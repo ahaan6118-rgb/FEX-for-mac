@@ -9,9 +9,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.fexformac.app</string>
     <key>CFBundleVersion</key>
-    <string>0.5.0</string>
+    <string>0.7.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.5.0-beta</string>
+    <string>0.7.0-beta</string>
     <key>CFBundleExecutable</key>
     <string>FEXforMac</string>
     <key>CFBundlePackageType</key>

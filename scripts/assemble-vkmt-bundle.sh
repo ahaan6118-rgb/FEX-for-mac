@@ -3,7 +3,7 @@ set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WINE_BUILD="${ROOT}/wine-11.12/build-full"
-FEX_BUILD="${ROOT}/build-fex-guestwindow"
+FEX_BUILD="${ROOT}/build"
 APP="${ROOT}/FEXforMac.app"
 WINE_DIR="${APP}/Contents/Resources/wine"
 LLVM_BIN="${ROOT}/llvm-mingw-20250514-ucrt-macos-universal/bin"
@@ -48,22 +48,16 @@ else
     echo "WARNING: xtajit64.dll not found"
 fi
 
-if [ -f "${FEX_BUILD}/Bin/libwow64fex.dll" ]; then
-    # The 32-bit provider must be the guest-window build (willfaust FEX fork, with the JIT state
-    # register moved off x28) and must never use x28, which Wine keeps the TEB in.
-    CACHE="${FEX_BUILD}/CMakeCache.txt"
-    grep -q "ENABLE_GUEST_WINDOW:BOOL=ON" "${CACHE}" \
-        || { echo "ERROR: ${FEX_BUILD} was not configured with ENABLE_GUEST_WINDOW=ON"; exit 1; }
-    grep -q "CMAKE_CXX_FLAGS:STRING=.*-ffixed-x28" "${CACHE}" \
-        || { echo "ERROR: ${FEX_BUILD} was not built with -ffixed-x28 (reconfigure with CMAKE_CXX_FLAGS and CMAKE_C_FLAGS set to -ffixed-x28)"; exit 1; }
-
+# Both FEX providers come from one tree (willfaust-FEX, branch fex-mac-unified) via scripts/build-fex.sh, which
+# also rewrites their remaining x18 TEB/TLS reads to x28.
+if [ -f "${FEX_BUILD}/fex-wow64/Bin/libwow64fex.dll" ] && [ -f "${FEX_BUILD}/fex-arm64ec/Bin/libarm64ecfex.dll" ]; then
     echo "Installing xtajit.dll (FEX wow64 provider, guest-window build)..."
-    cp "${FEX_BUILD}/Bin/libwow64fex.dll" "${WINE_DIR}/lib/wine/aarch64-windows/xtajit.dll"
-    # xtajit.dll is not linked by winegcc, so its x18 TEB reads are not rewritten automatically.
-    python3 "${ROOT}/wine-11.12/tools/vkmt-fix-x18-all.py" "${WINE_DIR}/lib/wine/aarch64-windows/xtajit.dll" \
-        || { echo "ERROR: x18->x28 patch of xtajit.dll failed"; exit 1; }
+    cp "${FEX_BUILD}/fex-wow64/Bin/libwow64fex.dll" "${WINE_DIR}/lib/wine/aarch64-windows/xtajit.dll"
+    echo "Installing fex64/libarm64ecfex.dll (FEX ARM64EC provider)..."
+    mkdir -p "${APP}/Contents/Resources/fex64"
+    cp "${FEX_BUILD}/fex-arm64ec/Bin/libarm64ecfex.dll" "${APP}/Contents/Resources/fex64/libarm64ecfex.dll"
 else
-    echo "WARNING: FEX wow64 provider not built"
+    echo "ERROR: FEX providers not built (run scripts/build-fex.sh)"; exit 1
 fi
 
 echo "Running x18->x28 TEB fix on ARM64 PE binaries..."

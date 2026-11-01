@@ -156,6 +156,7 @@ struct buffer
     void *host_ptr;
     void *map_ptr;
     size_t copy_length;
+    BOOL flush_explicit;                        /* copy mapping: only flushed ranges are copied back, at flush time */
     void *vm_ptr;
     SIZE_T vm_size;
     BOOL pinned;
@@ -1914,6 +1915,15 @@ static BOOL buffer_vm_alloc( TEB *teb, struct buffer *buffer, SIZE_T size )
     return TRUE;
 }
 
+/* Copy a flushed range of an explicit-flush copy mapping to the driver's mapping, before the driver flushes it. */
+static void flush_wow64_copy( struct buffer *buffer, size_t offset, size_t length )
+{
+    if (!buffer->flush_explicit || offset >= buffer->copy_length) return;
+    if (length > buffer->copy_length - offset) length = buffer->copy_length - offset;
+    TRACE( "Copying %#zx at %#zx from wow64 buffer %p to buffer %p\n", length, offset, buffer->map_ptr, buffer->host_ptr );
+    memcpy( (char *)buffer->host_ptr + offset, (char *)buffer->map_ptr + offset, length );
+}
+
 static void flush_buffer( TEB *teb, struct buffer *buffer, size_t offset, size_t length )
 {
     VkMappedMemoryRange memory_range =
@@ -1925,6 +1935,7 @@ static void flush_buffer( TEB *teb, struct buffer *buffer, size_t offset, size_t
     };
     VkResult vr;
 
+    flush_wow64_copy( buffer, offset, length );
     if (!buffer->vk_memory) return;
 
     vr = buffer->vk_device->p_vkFlushMappedMemoryRanges( buffer->vk_device->vk_device, 1, &memory_range );
@@ -2148,7 +2159,11 @@ static void *wow64_map_buffer( TEB *teb, struct buffer *buffer, GLenum target, G
     if (!buffer_vm_alloc( teb, buffer, length + (offset & 0xf) )) goto unmap;
     buffer->map_ptr = (char *)buffer->vm_ptr + (offset & 0xf);
     buffer->copy_length = (access & GL_MAP_WRITE_BIT) ? length : 0;
-    if (!(access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT)))
+    buffer->flush_explicit = (access & GL_MAP_WRITE_BIT) && (access & GL_MAP_FLUSH_EXPLICIT_BIT);
+    /* With explicit flushes only the flushed ranges are copied back, so a write-only map never needs the current
+     * contents (wined3d maps whole buffers this way for every dynamic update). */
+    if (!(access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT))
+        && !(buffer->flush_explicit && !(access & GL_MAP_READ_BIT)))
     {
         static int once;
         if (!once++)
@@ -2351,13 +2366,14 @@ static BOOL wow64_unmap_buffer( TEB *teb, struct buffer *buffer )
         unmap_vk_buffer( buffer );
     }
 
-    if (buffer->copy_length)
+    if (buffer->copy_length && !buffer->flush_explicit)
     {
         TRACE( "Copying %#zx from wow64 buffer %p to buffer %p\n", buffer->copy_length,
                buffer->map_ptr, buffer->host_ptr );
         memcpy( buffer->host_ptr, buffer->map_ptr, buffer->copy_length );
-        buffer->copy_length = 0;
     }
+    buffer->copy_length = 0;
+    buffer->flush_explicit = FALSE;
 
     buffer->host_ptr = buffer->map_ptr = NULL;
     return TRUE;

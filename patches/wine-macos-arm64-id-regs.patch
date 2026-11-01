@@ -1,0 +1,81 @@
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -2005,6 +2005,78 @@
+ 
+ #undef READ_ID_REG
+ #undef STR
++    return regidx;
++}
++
++#elif defined(__APPLE__)
++
++/* FEX for Mac: macOS doesn't let user space read the ID registers, so rebuild the fields that matter
++ * from the hw.optional.arm.* sysctls. Without them FEX (which reads "CP 40xx" from the registry)
++ * assumes a baseline ARMv8.0 CPU: no LSE atomics, no LRCPC for TSO loads, no FlagM, etc. */
++static UINT64 arm_feat( const char *name, UINT64 value, int shift )
++{
++    char full[64];
++    int on = 0;
++    size_t size = sizeof(on);
++
++    snprintf( full, sizeof(full), "hw.optional.arm.%s", name );
++    if (sysctlbyname( full, &on, &size, NULL, 0 ) || !on) return 0;
++    return value << shift;
++}
++
++static UINT64 arm_feat_max( const char *name1, UINT64 value1, const char *name2, UINT64 value2, int shift )
++{
++    UINT64 v = arm_feat( name2, value2, shift );
++    return v ? v : arm_feat( name1, value1, shift );
++}
++
++static DWORD get_core_id_regs_arm64( struct smbios_wine_id_reg_value_arm64 *regs,
++                                     WORD logical_thread_id )
++{
++    DWORD regidx = 0;
++    UINT64 isar0, isar1, isar2, pfr0, pfr1, mmfr1, mmfr2;
++    int fp16 = !!arm_feat( "FEAT_FP16", 1, 0 );
++
++    isar0 = arm_feat_max( "FEAT_AES", 1, "FEAT_PMULL", 2, 4 )
++          | arm_feat( "FEAT_SHA1", 1, 8 )
++          | arm_feat_max( "FEAT_SHA256", 1, "FEAT_SHA512", 2, 12 )
++          | arm_feat( "FEAT_CRC32", 1, 16 )
++          | arm_feat( "FEAT_LSE", 2, 20 )
++          | arm_feat( "FEAT_RDM", 1, 28 )
++          | arm_feat( "FEAT_SHA3", 1, 32 )
++          | arm_feat( "FEAT_DotProd", 1, 44 )
++          | arm_feat( "FEAT_FHM", 1, 48 )
++          | arm_feat_max( "FEAT_FlagM", 1, "FEAT_FlagM2", 2, 52 );
++    isar1 = arm_feat_max( "FEAT_DPB", 1, "FEAT_DPB2", 2, 0 )
++          | arm_feat( "FEAT_JSCVT", 1, 12 )
++          | arm_feat( "FEAT_FCMA", 1, 16 )
++          | arm_feat_max( "FEAT_LRCPC", 1, "FEAT_LRCPC2", 2, 20 )
++          | arm_feat( "FEAT_FRINTTS", 1, 32 )
++          | arm_feat( "FEAT_SB", 1, 36 )
++          | arm_feat( "FEAT_SPECRES", 1, 40 )
++          | arm_feat( "FEAT_BF16", 1, 44 )
++          | arm_feat( "FEAT_I8MM", 1, 52 );
++    isar2 = arm_feat( "FEAT_WFxT", 2, 0 )
++          | arm_feat( "FEAT_RPRES", 1, 4 )
++          | arm_feat( "FEAT_CSSC", 1, 52 );
++    pfr0 = 0x11                                    /* EL0/EL1: AArch64 only */
++         | (UINT64)(fp16 ? 1 : 0) << 16             /* FP */
++         | (UINT64)(fp16 ? 1 : 0) << 20             /* AdvSIMD */
++         | arm_feat( "FEAT_DIT", 1, 48 )
++         | arm_feat( "FEAT_CSV2", 1, 56 )
++         | arm_feat( "FEAT_CSV3", 1, 60 );
++    pfr1 = arm_feat( "FEAT_BTI", 1, 0 )
++         | arm_feat( "FEAT_SSBS", 1, 4 );
++    mmfr1 = arm_feat( "FEAT_AFP", 1, 44 );
++    mmfr2 = arm_feat( "FEAT_LSE2", 1, 32 );
++
++    regs[regidx++] = (struct smbios_wine_id_reg_value_arm64){ 0x4020, pfr0 };  /* ID_AA64PFR0_EL1 */
++    regs[regidx++] = (struct smbios_wine_id_reg_value_arm64){ 0x4021, pfr1 };  /* ID_AA64PFR1_EL1 */
++    regs[regidx++] = (struct smbios_wine_id_reg_value_arm64){ 0x4030, isar0 }; /* ID_AA64ISAR0_EL1 */
++    regs[regidx++] = (struct smbios_wine_id_reg_value_arm64){ 0x4031, isar1 }; /* ID_AA64ISAR1_EL1 */
++    regs[regidx++] = (struct smbios_wine_id_reg_value_arm64){ 0x4032, isar2 }; /* ID_AA64ISAR2_EL1 */
++    regs[regidx++] = (struct smbios_wine_id_reg_value_arm64){ 0x4039, mmfr1 }; /* ID_AA64MMFR1_EL1 */
++    regs[regidx++] = (struct smbios_wine_id_reg_value_arm64){ 0x403a, mmfr2 }; /* ID_AA64MMFR2_EL1 */
+     return regidx;
+ }
+ 

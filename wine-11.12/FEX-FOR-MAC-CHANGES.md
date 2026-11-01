@@ -36,6 +36,7 @@ experimental x86-64 interpreter in `dlls/xtajit64/`.
 - `dlls/ntdll/unix/signal_arm64.c`
 - `dlls/ntdll/unix/socket.c`
 - `dlls/ntdll/unix/sync.c`
+- `dlls/ntdll/unix/system.c`
 - `dlls/ntdll/unix/thread.c`
 - `dlls/ntdll/unix/unix_private.h`
 - `dlls/ntdll/unix/virtual.c`
@@ -52,6 +53,8 @@ experimental x86-64 interpreter in `dlls/xtajit64/`.
 - `dlls/winecoreaudio.drv/coreaudio.c`
 - `dlls/wined3d/adapter_gl.c`
 - `dlls/wined3d/glsl_shader.c`
+- `dlls/winemac.drv/keyboard.c`
+- `dlls/winemac.drv/macdrv_cocoa.h`
 - `dlls/winemac.drv/macdrv_main.c`
 - `dlls/winemac.drv/opengl.c`
 - `dlls/winevulkan/vulkan_private.h`
@@ -84,3 +87,26 @@ experimental x86-64 interpreter in `dlls/xtajit64/`.
 - `tools/makedep.c`
 - `tools/vkmt-fix-x18-all.py`
 - `tools/vkmt-fix-x18-tls.py`
+
+## macOS ARM64 CPU ID registers (Oct 31 2026)
+
+`dlls/ntdll/unix/system.c`: `get_core_id_regs_arm64()` was a stub off Linux, so the
+`HKLM\Hardware\Description\System\CentralProcessor\N\CP 40xx` values were never created and FEX
+(which reads them) assumed a baseline ARMv8.0 CPU with no LSE atomics, LRCPC or FlagM. On macOS the
+ID_AA64* fields are now rebuilt from the `hw.optional.arm.FEAT_*` sysctls.
+Patch: `patches/wine-macos-arm64-id-regs.patch`.
+
+## WoW64 OpenGL: explicit-flush maps copy only flushed ranges (Nov 1 2026)
+
+`dlls/opengl32/unix_wgl.c`: a 32-bit program's buffer map that can't be returned directly (the driver's pointer
+is above 4 GB) goes through a copy. For write-only maps with `GL_MAP_FLUSH_EXPLICIT_BIT` (wined3d's dynamic buffer
+updates) the whole-buffer copy in on map and copy back on unmap are replaced by copying each flushed range at
+`glFlushMappedBufferRange` time, before the driver flush. IWBTGR: 1.20 -> 0.74 CPU cores at 50 fps.
+Patch: `patches/wine-wow64-gl-flush-explicit-copy.patch`.
+
+## Mac driver: per-program KeyRemap (Nov 1 2026)
+
+`dlls/winemac.drv`: new `KeyRemap` option (`HKCU\Software\Wine\Mac Driver` or
+`HKCU\Software\Wine\AppDefaults\<exe>\Mac Driver`), e.g. `Space=Shift, Z=J`: the key on the left acts as the key on
+the right. Applied to the Mac keycode before it is translated. The app's Game > Key Remapping menu edits it.
+Patch: `patches/wine-macdrv-keyremap.patch`.
