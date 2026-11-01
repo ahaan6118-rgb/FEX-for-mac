@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var recentMenu: NSPopUpButton!
     var isRunning = false
     var currentProcess: Process?
+    var keyRemapEditor: KeyRemapEditor?
 
     static let recentAppsKey = "RecentApps"
     static let maxRecent = 10
@@ -181,6 +182,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         steamButton.frame = NSRect(x: 432, y: windowHeight - 148, width: 90, height: 28)
         steamButton.autoresizingMask = [.maxXMargin, .minYMargin]
         contentView.addSubview(steamButton)
+
+        let keysButton = NSButton(title: "Keys...", target: self, action: #selector(keyRemapClicked))
+        keysButton.bezelStyle = .rounded
+        keysButton.frame = NSRect(x: windowWidth - 110, y: windowHeight - 148, width: 90, height: 28)
+        keysButton.toolTip = "Remap keys for the selected game"
+        keysButton.autoresizingMask = [.minXMargin, .minYMargin]
+        contentView.addSubview(keysButton)
 
         // Recent apps dropdown
         recentMenu = NSPopUpButton(frame: NSRect(x: 220, y: windowHeight - 148, width: 200, height: 28))
@@ -1273,24 +1281,51 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func runWineReg(_ args: [String]) -> String? {
         let (_, wineDir, env) = makeWineEnv()
         guard initWinePrefix(wineDir: wineDir, env: env) else { return nil }
+        // Output goes to a file, not a pipe: reg may start the Wine server, which inherits stdout and keeps a pipe
+        // open for as long as it runs (with a game running, indefinitely).
+        let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("fexformac-reg-\(UUID().uuidString).txt")
+        guard FileManager.default.createFile(atPath: outURL.path, contents: nil),
+              let out = try? FileHandle(forWritingTo: outURL) else { return nil }
+        defer { try? FileManager.default.removeItem(at: outURL) }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: wineDir + "/bin/wine")
         proc.arguments = ["reg"] + args
         proc.environment = env
-        let pipe = Pipe()
-        proc.standardOutput = pipe
+        proc.standardOutput = out
         proc.standardError = FileHandle.nullDevice
         do { try proc.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
         proc.waitUntilExit()
-        return String(data: data, encoding: .utf8)
+        try? out.close()
+        guard proc.terminationStatus == 0 || args.first == "query" else { return nil }
+        return (try? String(contentsOf: outURL, encoding: .utf8)) ?? ""
+    }
+
+    /// The KeyRemap value saved for a program, read straight from the prefix's user.reg (no Wine needed).
+    func savedKeyRemap(exeName: String) -> String {
+        guard let reg = try? String(contentsOfFile: Self.prefixDir + "/user.reg", encoding: .utf8) else { return "" }
+        let section = "[software\\\\wine\\\\appdefaults\\\\\(exeName.lowercased())\\\\mac driver]"
+        var inSection = false
+        for line in reg.components(separatedBy: "\n") {
+            if line.hasPrefix("[") {
+                inSection = line.lowercased().hasPrefix(section)
+            } else if inSection, line.hasPrefix("\"KeyRemap\"=\"") {
+                return String(line.dropFirst("\"KeyRemap\"=\"".count).dropLast())
+                    .replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\\\", with: "\\")
+            }
+        }
+        return ""
     }
 
     @objc func keyRemapClicked() {
-        let path = pathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard path.lowercased().hasSuffix(".exe") else {
-            appendError("Pick a game first (Open .exe or a recent app), then choose Key Remapping.\n")
-            return
+        var path = pathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !path.lowercased().hasSuffix(".exe") {
+            let panel = NSOpenPanel()
+            panel.title = "Choose the game to remap keys for"
+            panel.allowedContentTypes = [.init(filenameExtension: "exe")!]
+            panel.allowsMultipleSelection = false
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            path = url.path
+            pathField.stringValue = path
         }
         let exeName = URL(fileURLWithPath: path).lastPathComponent
         let gameDir = URL(fileURLWithPath: path).deletingLastPathComponent().path
@@ -1303,35 +1338,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Wine's Mac driver reads KeyRemap from HKCU\Software\Wine\AppDefaults\<exe>\Mac Driver when the game starts.
         let key = "HKCU\\Software\\Wine\\AppDefaults\\\(exeName)\\Mac Driver"
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let output = self?.runWineReg(["query", key, "/v", "KeyRemap"]) ?? ""
-            let current = output.components(separatedBy: "\n")
-                .first { $0.contains("KeyRemap") }?
-                .components(separatedBy: "REG_SZ").last?
-                .trimmingCharacters(in: .whitespaces) ?? ""
-            DispatchQueue.main.async { self?.showKeyRemapDialog(exeName: exeName, key: key, current: current) }
-        }
+        showKeyRemapDialog(exeName: exeName, key: key, current: savedKeyRemap(exeName: exeName))
     }
 
     func showKeyRemapDialog(exeName: String, key: String, current: String) {
-        let alert = NSAlert()
-        alert.messageText = "Key Remapping for \(exeName)"
-        alert.informativeText = """
-            Pressing the key on the left acts as the key on the right, e.g. "Space=Shift, Z=J". \
-            Keys: A-Z, 0-9, F1-F12, Space, Return, Tab, Escape, Backspace, Delete, Up, Down, Left, Right, \
-            Shift, Control, Option, Command, RightShift, RightControl, RightOption, Home, End, PageUp, PageDown, \
-            Minus, Equal, Comma, Period, Slash, Semicolon, Quote, Grave. Leave empty to remove. \
-            Takes effect the next time the game starts.
-            """
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        field.stringValue = current
-        field.placeholderString = "Space=Shift, Z=J"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let value = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let editor = KeyRemapEditor(exeName: exeName, current: current)
+        keyRemapEditor = editor
+        editor.onSave = { [weak self] value in
+            self?.keyRemapEditor = nil
+            self?.saveKeyRemap(exeName: exeName, key: key, value: value)
+        }
+        editor.onCancel = { [weak self] in self?.keyRemapEditor = nil }
+        window.beginSheet(editor.window)
+    }
+
+    func saveKeyRemap(exeName: String, key: String, value: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let args = value.isEmpty ? ["delete", key, "/v", "KeyRemap", "/f"]
                                      : ["add", key, "/v", "KeyRemap", "/t", "REG_SZ", "/d", value, "/f"]
@@ -1343,6 +1364,239 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+}
+
+// MARK: - Key remap editor
+
+/// Mac virtual keycodes with the names winemac.drv's KeyRemap option accepts.
+let macKeyNames: [UInt16: String] = [
+    0x00: "A", 0x01: "S", 0x02: "D", 0x03: "F", 0x04: "H", 0x05: "G", 0x06: "Z", 0x07: "X", 0x08: "C", 0x09: "V",
+    0x0B: "B", 0x0C: "Q", 0x0D: "W", 0x0E: "E", 0x0F: "R", 0x10: "Y", 0x11: "T", 0x12: "1", 0x13: "2", 0x14: "3",
+    0x15: "4", 0x16: "6", 0x17: "5", 0x18: "Equal", 0x19: "9", 0x1A: "7", 0x1B: "Minus", 0x1C: "8", 0x1D: "0",
+    0x1E: "RightBracket", 0x1F: "O", 0x20: "U", 0x21: "LeftBracket", 0x22: "I", 0x23: "P", 0x24: "Return", 0x25: "L",
+    0x26: "J", 0x27: "Quote", 0x28: "K", 0x29: "Semicolon", 0x2A: "Backslash", 0x2B: "Comma", 0x2C: "Slash",
+    0x2D: "N", 0x2E: "M", 0x2F: "Period", 0x30: "Tab", 0x31: "Space", 0x32: "Grave", 0x33: "Backspace",
+    0x35: "Escape", 0x37: "Command", 0x38: "Shift", 0x39: "CapsLock", 0x3A: "Option", 0x3B: "Control",
+    0x3C: "RightShift", 0x3D: "RightOption", 0x3E: "RightControl", 0x60: "F5", 0x61: "F6", 0x62: "F7", 0x63: "F3",
+    0x64: "F8", 0x65: "F9", 0x67: "F11", 0x6D: "F10", 0x6F: "F12", 0x73: "Home", 0x74: "PageUp", 0x75: "Delete",
+    0x76: "F4", 0x77: "End", 0x78: "F2", 0x79: "PageDown", 0x7A: "F1", 0x7B: "Left", 0x7C: "Right", 0x7D: "Down",
+    0x7E: "Up",
+]
+
+/// The KeyRemap name for a name typed in any case (or one of the driver's aliases), nil if unknown.
+func canonicalKeyName(_ name: String) -> String? {
+    let aliases = ["enter": "Return", "esc": "Escape", "cmd": "Command", "alt": "Option", "ctrl": "Control",
+                   "rightalt": "RightOption", "rightctrl": "RightControl"]
+    let lower = name.trimmingCharacters(in: .whitespaces).lowercased()
+    if let alias = aliases[lower] { return alias }
+    return macKeyNames.values.first { $0.lowercased() == lower }
+}
+
+func keyDisplayName(_ name: String) -> String {
+    ["Up": "\u{2191} Up", "Down": "\u{2193} Down", "Left": "\u{2190} Left", "Right": "\u{2192} Right"][name] ?? name
+}
+
+/// A button that, once clicked, says "Press a key..." and records the next key (or modifier) pressed.
+class KeyCaptureButton: NSButton {
+    var keyName: String? { didSet { refresh() } }
+    var placeholder = "Not changed" { didSet { refresh() } }
+    var onCapture: ((String) -> Void)?
+    private(set) var capturing = false
+
+    func refresh() {
+        title = capturing ? "Press a key..." : (keyName.map(keyDisplayName) ?? placeholder)
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        capturing = true
+        refresh()
+        window?.makeFirstResponder(self)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        capturing = false
+        refresh()
+        return super.resignFirstResponder()
+    }
+
+    private func capture(_ keyCode: UInt16) {
+        guard capturing, let name = macKeyNames[keyCode] else { return }
+        capturing = false
+        refresh()
+        onCapture?(name)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if capturing { capture(event.keyCode) } else { super.keyDown(with: event) }
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        // a modifier going down (not up)
+        if capturing, !event.modifierFlags.intersection([.shift, .control, .option, .command, .capsLock]).isEmpty {
+            capture(event.keyCode)
+        }
+    }
+
+}
+
+/// While a KeyCaptureButton is recording, every key goes to it first, so Return/Escape/Tab/Cmd-shortcuts are
+/// recorded instead of pressing the sheet's buttons or moving focus.
+class KeyCaptureWindow: NSWindow {
+    override func sendEvent(_ event: NSEvent) {
+        if let button = firstResponder as? KeyCaptureButton, button.capturing {
+            if event.type == .keyDown { button.keyDown(with: event); return }
+            if event.type == .flagsChanged { button.flagsChanged(with: event); return }
+        }
+        super.sendEvent(event)
+    }
+}
+
+/// Game-style controls sheet: one row per game key; click its button and press the key that should act as it.
+class KeyRemapEditor: NSObject {
+    static let defaultGameKeys = ["Up", "Down", "Left", "Right", "Space", "Shift", "Control", "Z", "X", "C",
+                                  "Return", "Escape"]
+    let window: NSWindow
+    var onSave: ((String) -> Void)?
+    var onCancel: (() -> Void)?
+    private var gameKeys: [String]
+    private var mapping: [String: String] = [:] // game key -> key pressed for it
+    private var buttons: [String: KeyCaptureButton] = [:]
+    private let rows = NSStackView()
+
+    init(exeName: String, current: String) {
+        for entry in current.split(whereSeparator: { $0 == "," || $0 == ";" }) {
+            let parts = entry.split(separator: "=", maxSplits: 1).map(String.init)
+            if parts.count == 2, let pressed = canonicalKeyName(parts[0]), let game = canonicalKeyName(parts[1]) {
+                mapping[game] = pressed
+            }
+        }
+        gameKeys = Self.defaultGameKeys + mapping.keys.filter { !Self.defaultGameKeys.contains($0) }.sorted()
+
+        window = KeyCaptureWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 520), styleMask: [.titled],
+                          backing: .buffered, defer: false)
+        super.init()
+
+        let content = window.contentView!
+        let title = NSTextField(labelWithString: "Controls for \(exeName)")
+        title.font = .systemFont(ofSize: 15, weight: .semibold)
+        let help = NSTextField(wrappingLabelWithString:
+            "Click the button next to a game key, then press the key you want to use for it. "
+            + "The original key keeps working too. Changes apply the next time the game starts.")
+        help.font = .systemFont(ofSize: 12)
+        help.textColor = .secondaryLabelColor
+
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = 6
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        let flipped = FlippedView()
+        flipped.translatesAutoresizingMaskIntoConstraints = false
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        flipped.addSubview(rows)
+        scroll.documentView = flipped
+        NSLayoutConstraint.activate([
+            rows.topAnchor.constraint(equalTo: flipped.topAnchor, constant: 4),
+            rows.leadingAnchor.constraint(equalTo: flipped.leadingAnchor),
+            rows.trailingAnchor.constraint(equalTo: flipped.trailingAnchor),
+            rows.bottomAnchor.constraint(equalTo: flipped.bottomAnchor, constant: -4),
+            flipped.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+        ])
+        gameKeys.forEach(addRow)
+
+        let addButton = KeyCaptureButton(title: "", target: nil, action: nil)
+        addButton.bezelStyle = .rounded
+        addButton.placeholder = "Add Key..."
+        addButton.onCapture = { [weak self, weak addButton] game in
+            addButton?.keyName = nil
+            guard let self = self, !self.gameKeys.contains(game) else { return }
+            self.gameKeys.append(game)
+            self.addRow(game)
+        }
+        let resetButton = NSButton(title: "Reset All", target: self, action: #selector(resetAll))
+        let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
+        cancelButton.keyEquivalent = "\u{1b}"
+        let saveButton = NSButton(title: "Save", target: self, action: #selector(save))
+        saveButton.keyEquivalent = "\r"
+        let buttonRow = NSStackView(views: [addButton, resetButton, NSView(), cancelButton, saveButton])
+        buttonRow.orientation = .horizontal
+
+        let main = NSStackView(views: [title, help, scroll, buttonRow])
+        main.orientation = .vertical
+        main.alignment = .leading
+        main.spacing = 10
+        main.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(main)
+        NSLayoutConstraint.activate([
+            main.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            main.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            main.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            main.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
+            help.widthAnchor.constraint(equalTo: main.widthAnchor),
+            scroll.widthAnchor.constraint(equalTo: main.widthAnchor),
+            buttonRow.widthAnchor.constraint(equalTo: main.widthAnchor),
+            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 200),
+        ])
+    }
+
+    private func addRow(_ game: String) {
+        let label = NSTextField(labelWithString: keyDisplayName(game))
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        let button = KeyCaptureButton(title: "", target: nil, action: nil)
+        button.bezelStyle = .rounded
+        button.keyName = mapping[game]
+        button.widthAnchor.constraint(equalToConstant: 170).isActive = true
+        button.onCapture = { [weak self] pressed in self?.assign(pressed, to: game) }
+        let clear = NSButton(title: "Clear", target: self, action: #selector(clearRow(_:)))
+        clear.identifier = NSUserInterfaceItemIdentifier(game)
+        buttons[game] = button
+        rows.addArrangedSubview(NSStackView(views: [label, button, clear]))
+    }
+
+    private func assign(_ pressed: String, to game: String) {
+        // one pressed key drives one game key; pressing a key for itself means "not changed"
+        for (other, key) in mapping where key == pressed && other != game {
+            mapping[other] = nil
+            buttons[other]?.keyName = nil
+        }
+        mapping[game] = pressed == game ? nil : pressed
+        buttons[game]?.keyName = mapping[game]
+    }
+
+    @objc private func clearRow(_ sender: NSButton) {
+        guard let game = sender.identifier?.rawValue else { return }
+        mapping[game] = nil
+        buttons[game]?.keyName = nil
+    }
+
+    @objc private func resetAll() {
+        mapping.removeAll()
+        buttons.values.forEach { $0.keyName = nil }
+    }
+
+    /// The KeyRemap value: "pressed=game" pairs in row order.
+    var remapString: String {
+        gameKeys.compactMap { game in mapping[game].map { "\($0)=\(game)" } }.joined(separator: ", ")
+    }
+
+    @objc private func save() {
+        window.sheetParent?.endSheet(window)
+        onSave?(remapString)
+    }
+
+    @objc private func cancel() {
+        window.sheetParent?.endSheet(window)
+        onCancel?()
+    }
+}
+
+/// Top-to-bottom layout for the scroll view's document.
+class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 // MARK: - Drop target

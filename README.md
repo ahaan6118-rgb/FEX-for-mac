@@ -44,9 +44,10 @@ Tested on an M1 Mac, macOS 26.
    settings. Afterwards just click the **Steam** button. Use **Stop** (not force-quit) so Steam can
    save your login.
 
-**Key remapping:** pick the game (Open… or a recent app), then **Game → Key Remapping…** (⌘K) and enter
-pairs like `Space=Shift, Z=J` — pressing the key on the left acts as the key on the right, only in that game,
-from its next start. RPG Maker games run natively instead: press F1 (fn+F1) in the game to change their keys.
+**Key remapping:** pick the game (Open… or a recent app) and click **Keys…** (or **Game → Key Remapping…**, ⌘K).
+Click the button next to a game key such as ↑ Up, then press the key you want to use for it (e.g. W). The original
+key keeps working; changes apply only to that game, from its next start. RPG Maker games run natively instead:
+press F1 (fn+F1) in the game to change their keys.
 
 When a program exits, the app also stops any of its Windows processes that are left running without a
 Wine server (these used to keep spinning in the background).
